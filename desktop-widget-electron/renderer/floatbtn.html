@@ -8,41 +8,40 @@
     background: transparent;
     overflow: hidden;
   }
+  /* Outer ring: this is the drag handle — grab near the edge to move it. */
   #btn {
     width: 56px; height: 56px; border-radius: 50%;
     background: #6e1b2c;
     border: 2px solid rgba(255,255,255,0.85);
     box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     display: flex; align-items: center; justify-content: center;
-    cursor: pointer;
     -webkit-user-select: none;
-    -webkit-app-region: drag; /* set directly on the element under the cursor */
+    -webkit-app-region: drag;
   }
-  #btn img {
-    width: 34px; height: 34px; object-fit: contain;
-    pointer-events: none; /* let mouse events fall through to #btn */
+  /* Inner circle: this is the click target — deliberately NOT a drag
+     region, because app-region:drag swallows click events entirely. */
+  #hit {
+    width: 42px; height: 42px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+  }
+  #hit img {
+    width: 32px; height: 32px; object-fit: contain;
+    pointer-events: none; /* clicks land on #hit, not the image itself */
   }
 </style>
 </head>
 <body>
   <div id="btn">
-    <img src="../build/fab.png" alt="" />
+    <div id="hit">
+      <img src="../build/fab.png" alt="" />
+    </div>
   </div>
 <script>
-  const btn = document.getElementById('btn');
-  let downAt = 0;
-  let downPos = { x: 0, y: 0 };
-
-  btn.addEventListener('mousedown', (e) => {
-    downAt = Date.now();
-    downPos = { x: e.screenX, y: e.screenY };
-  });
-  btn.addEventListener('mouseup', (e) => {
-    const moved = Math.hypot(e.screenX - downPos.x, e.screenY - downPos.y);
-    const elapsed = Date.now() - downAt;
-    if (moved < 4 && elapsed < 400) window.statusApp.fabClicked();
-  });
-  btn.addEventListener('contextmenu', (e) => {
+  const hit = document.getElementById('hit');
+  hit.addEventListener('click', () => window.statusApp.fabClicked());
+  hit.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     window.statusApp.showFabMenu();
   });

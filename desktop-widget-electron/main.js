@@ -107,12 +107,15 @@ function createPopup() {
     skipTaskbar: true,
     backgroundColor: '#00000000',
     transparent: true,
+    alwaysOnTop: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
+  win.setAlwaysOnTop(true, 'screen-saver'); // stay above everything, including other apps
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   // Deliberately no hide-on-blur: closing is only via the ✕ button, so
   // switching to another app to look something up doesn't lose your form.

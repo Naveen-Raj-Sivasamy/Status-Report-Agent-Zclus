@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -48,24 +49,46 @@ TOKEN = CONFIG.get("TOKEN", "")
 YOUR_NAME = CONFIG.get("YOUR_NAME", "")  # optional: prefill a "Name" field if present
 
 
+def _call_with_retry(fn, attempts=3, delay_seconds=2):
+    """Apps Script occasionally 404s / times out transiently (cold start,
+    redeploy propagation). Retry a few times before giving up."""
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts:
+                time.sleep(delay_seconds)
+    raise last_error
+
+
 def api_get(action, **params):
     params["action"] = action
-    resp = requests.get(WEBHOOK_URL, params=params, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("ok"):
-        raise RuntimeError(data.get("error", "Unknown API error"))
-    return data
+
+    def do_call():
+        resp = requests.get(WEBHOOK_URL, params=params, timeout=45)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error", "Unknown API error"))
+        return data
+
+    return _call_with_retry(do_call)
 
 
 def api_post(tab, values):
     payload = {"token": TOKEN, "tab": tab, "values": values}
-    resp = requests.post(WEBHOOK_URL, data=json.dumps(payload), timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("ok"):
-        raise RuntimeError(data.get("error", "Unknown API error"))
-    return data
+
+    def do_call():
+        resp = requests.post(WEBHOOK_URL, data=json.dumps(payload), timeout=45)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error", "Unknown API error"))
+        return data
+
+    return _call_with_retry(do_call)
 
 
 # --------------------------- UI ---------------------------------------

@@ -1,8 +1,9 @@
-const { app, Tray, Menu, BrowserWindow, ipcMain, screen, nativeImage } = require('electron');
+const { app, Tray, Menu, BrowserWindow, ipcMain, screen, nativeImage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
+const POSITION_PATH = path.join(app.getPath('userData'), 'float-position.json');
 
 function loadConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
@@ -17,7 +18,6 @@ let config;
 try {
   config = loadConfig();
 } catch (err) {
-  // Show the error once a window/dialog is possible.
   app.whenReady().then(() => {
     const { dialog } = require('electron');
     dialog.showErrorBox('Status Update — setup needed', err.message);
@@ -28,6 +28,7 @@ try {
 
 let tray = null;
 let popup = null;
+let floatBtn = null;
 
 // -------------------- backend calls (with retry) --------------------
 
@@ -75,13 +76,25 @@ ipcMain.handle('get-columns', async (_e, tab) => apiGet({ action: 'columns', tab
 ipcMain.handle('submit-entry', async (_e, { tab, values }) => apiPost(tab, values));
 ipcMain.handle('get-your-name', () => config.YOUR_NAME || '');
 ipcMain.handle('hide-window', () => popup && popup.hide());
+ipcMain.handle('open-sheet', () => {
+  if (config.SHEET_URL) shell.openExternal(config.SHEET_URL);
+});
+ipcMain.handle('fab-clicked', () => toggleWindow());
+ipcMain.handle('show-fab-menu', () => {
+  Menu.buildFromTemplate([
+    { label: 'Submit status update', click: toggleWindow },
+    { label: 'Open sheet', click: () => config.SHEET_URL && shell.openExternal(config.SHEET_URL) },
+    { type: 'separator' },
+    { label: 'Quit', click: () => app.quit() },
+  ]).popup({ window: floatBtn });
+});
 
-// -------------------- tray + popup window --------------------
+// -------------------- popup (the form) --------------------
 
 function createPopup() {
   const win = new BrowserWindow({
     width: 380,
-    height: 480,
+    height: 500,
     show: false,
     frame: false,
     resizable: false,
@@ -102,21 +115,20 @@ function createPopup() {
   return win;
 }
 
-function positionPopupNearTray() {
-  const trayBounds = tray.getBounds();
+function positionPopupNearWindow(refBounds) {
   const winBounds = popup.getBounds();
-  const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
+  const display = screen.getDisplayNearestPoint({ x: refBounds.x, y: refBounds.y });
   const workArea = display.workArea;
 
-  let x = Math.round(trayBounds.x + trayBounds.width / 2 - winBounds.width / 2);
+  let x = Math.round(refBounds.x + refBounds.width / 2 - winBounds.width / 2);
   let y;
-  // Tray at top of screen (Windows top? usually bottom; macOS top) — decide by tray y position.
-  if (trayBounds.y < workArea.y + workArea.height / 2) {
-    y = Math.round(trayBounds.y + trayBounds.height + 8); // menu bar at top (macOS)
+  if (refBounds.y < workArea.y + workArea.height / 2) {
+    y = Math.round(refBounds.y + refBounds.height + 8);
   } else {
-    y = Math.round(trayBounds.y - winBounds.height - 8); // taskbar at bottom (Windows)
+    y = Math.round(refBounds.y - winBounds.height - 8);
   }
   x = Math.min(Math.max(x, workArea.x + 8), workArea.x + workArea.width - winBounds.width - 8);
+  y = Math.min(Math.max(y, workArea.y + 8), workArea.y + workArea.height - winBounds.height - 8);
   popup.setPosition(x, y, false);
 }
 
@@ -125,36 +137,96 @@ function toggleWindow() {
     popup.hide();
     return;
   }
-  positionPopupNearTray();
+  const refBounds = floatBtn ? floatBtn.getBounds() : tray.getBounds();
+  positionPopupNearWindow(refBounds);
   popup.show();
   popup.focus();
   popup.webContents.send('opened');
 }
 
+// -------------------- floating draggable button --------------------
+
+function loadSavedPosition() {
+  try {
+    return JSON.parse(fs.readFileSync(POSITION_PATH, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function savePosition(x, y) {
+  try {
+    fs.writeFileSync(POSITION_PATH, JSON.stringify({ x, y }));
+  } catch {
+    /* best-effort */
+  }
+}
+
+function createFloatButton() {
+  const saved = loadSavedPosition();
+  const primary = screen.getPrimaryDisplay().workArea;
+  const size = 56;
+  const x = saved ? saved.x : primary.x + primary.width - size - 24;
+  const y = saved ? saved.y : primary.y + Math.round(primary.height / 2);
+
+  const win = new BrowserWindow({
+    width: size,
+    height: size,
+    x,
+    y,
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    movable: true,
+    skipTaskbar: true,
+    hasShadow: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.loadFile(path.join(__dirname, 'renderer', 'floatbtn.html'));
+  win.once('ready-to-show', () => win.show());
+
+  let saveTimer = null;
+  win.on('moved', () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      const [px, py] = win.getPosition();
+      savePosition(px, py);
+    }, 250);
+  });
+
+  return win;
+}
+
 app.whenReady().then(() => {
-  if (!config) return; // error dialog already shown
+  if (!config) return;
 
-  app.dock && app.dock.hide(); // macOS: this is a tray-only app, no dock icon
+  if (app.dock) app.dock.hide(); // tray/floating-button app, no dock icon needed
 
-  const trayIcon = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray.png'));
-  tray = new Tray(trayIcon.resize({ width: 20, height: 20 }));
-  tray.setToolTip('Status Update');
-
-  popup = createPopup();
-
+  const trayImg = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray.png'));
+  tray = new Tray(trayImg.resize({ width: 20, height: 20 }));
+  tray.setToolTip('Status Report Generator');
   tray.on('click', toggleWindow);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Submit status update', click: toggleWindow },
+      { label: 'Open sheet', click: () => config.SHEET_URL && shell.openExternal(config.SHEET_URL) },
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() },
     ])
   );
+
+  popup = createPopup();
+  floatBtn = createFloatButton();
 });
 
-app.on('window-all-closed', (e) => {
-  // Keep running in the tray even if the popup is closed.
-  if (process.platform !== 'darwin') {
-    // no-op: we don't want the app to quit just because the (hidden) window closed
-  }
+app.on('window-all-closed', () => {
+  // Keep running via the tray/floating button even if a window is hidden/closed.
 });

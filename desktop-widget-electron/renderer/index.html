@@ -2,114 +2,126 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>Status Update</title>
+<title>Status Report Generator</title>
 <style>
   :root {
-    --bg: #1c1e26;
-    --card: #23262f;
-    --card-hover: #2b2f3a;
-    --border: #343846;
-    --text: #f2f3f5;
-    --text-dim: #9aa0ac;
-    --accent: #4f7cff;
-    --accent-hover: #5f8aff;
-    --danger: #ef5a5a;
-    --success: #3ec97a;
+    --brand: #6e1b2c;
+    --brand-hover: #872236;
+    --surface: #ffffff;
+    --surface-hover: #f4eef0;
+    --border: #e7dade;
+    --text: #2a2020;
+    --text-dim: #7a6a6d;
+    --on-brand: #ffffff;
+    --on-brand-dim: #e8c9cf;
+    --danger: #c0392b;
+    --success: #2e8b57;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   }
   * { box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0; height: 100%;
     background: transparent;
-    -webkit-app-region: no-drag;
     user-select: none;
   }
   #card {
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+    background: var(--brand);
+    border: 1px solid rgba(0,0,0,0.25);
+    border-radius: 16px;
+    box-shadow: 0 16px 44px rgba(0,0,0,0.5);
     overflow: hidden;
   }
   header {
-    padding: 16px 18px 12px;
-    border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 16px 12px;
+    display: flex; align-items: flex-start; justify-content: space-between;
   }
   header h1 {
-    font-size: 14px; font-weight: 600; color: var(--text); margin: 0;
+    font-size: 15px; font-weight: 700; color: var(--on-brand); margin: 0;
     letter-spacing: 0.2px;
   }
-  header .sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
-  #close-btn {
-    -webkit-app-region: no-drag;
-    background: none; border: none; color: var(--text-dim);
-    font-size: 16px; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+  header .sub { font-size: 11px; color: var(--on-brand-dim); margin-top: 3px; }
+  .header-actions { display: flex; gap: 6px; }
+  .icon-btn {
+    background: rgba(255,255,255,0.14); border: none; color: var(--on-brand);
+    font-size: 12px; cursor: pointer; padding: 5px 9px; border-radius: 7px;
   }
-  #close-btn:hover { background: var(--card-hover); color: var(--text); }
+  .icon-btn:hover { background: rgba(255,255,255,0.24); }
 
-  main { flex: 1; overflow-y: auto; padding: 14px 16px; }
+  main { flex: 1; overflow-y: auto; padding: 6px 16px 12px; }
 
   .tab-btn {
     width: 100%; text-align: left;
-    background: var(--card);
-    border: 1px solid var(--border);
+    background: var(--surface);
+    border: none;
     color: var(--text);
-    padding: 12px 14px;
-    border-radius: 10px;
+    padding: 13px 14px;
+    border-radius: 12px;
     font-size: 13px;
-    margin-bottom: 8px;
+    font-weight: 500;
+    margin-bottom: 9px;
     cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
     transition: background 0.12s ease, transform 0.06s ease;
   }
-  .tab-btn:hover { background: var(--card-hover); }
+  .tab-btn:hover { background: var(--surface-hover); }
   .tab-btn:active { transform: scale(0.98); }
 
-  .field { margin-bottom: 12px; }
+  .field { margin-bottom: 11px; }
   .field label {
-    display: block; font-size: 11px; color: var(--text-dim);
-    margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.4px;
+    display: block; font-size: 10.5px; color: var(--on-brand-dim);
+    margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;
+    font-weight: 600;
   }
-  .field textarea, .field input {
-    width: 100%; background: var(--card); border: 1px solid var(--border);
-    border-radius: 8px; color: var(--text); padding: 9px 10px; font-size: 13px;
+  .field textarea, .field input, .field select {
+    width: 100%; background: var(--surface); border: none;
+    border-radius: 9px; color: var(--text); padding: 9px 10px; font-size: 13px;
     font-family: inherit; resize: vertical; min-height: 34px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
   }
-  .field textarea:focus, .field input:focus {
-    outline: none; border-color: var(--accent);
+  .field select { appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%237a6a6d'/></svg>");
+    background-repeat: no-repeat; background-position: right 10px center;
+    padding-right: 28px;
+  }
+  .field input[readonly] { color: var(--text-dim); background: #f2ecee; }
+  .field textarea:focus, .field input:focus, .field select:focus {
+    outline: 2px solid rgba(255,255,255,0.6); outline-offset: 1px;
   }
 
-  footer {
-    padding: 12px 16px; border-top: 1px solid var(--border);
-    display: flex; gap: 8px; justify-content: flex-end;
+  footer.form-actions {
+    padding: 4px 16px 4px; display: flex; gap: 8px; justify-content: flex-end;
   }
   button.primary, button.secondary {
-    -webkit-app-region: no-drag;
-    border: none; border-radius: 8px; padding: 9px 16px;
-    font-size: 12.5px; font-weight: 600; cursor: pointer;
+    border: none; border-radius: 9px; padding: 9px 16px;
+    font-size: 12.5px; font-weight: 700; cursor: pointer;
   }
-  button.primary { background: var(--accent); color: white; }
-  button.primary:hover { background: var(--accent-hover); }
-  button.primary:disabled { opacity: 0.5; cursor: default; }
-  button.secondary { background: transparent; color: var(--text-dim); }
-  button.secondary:hover { color: var(--text); }
+  button.primary { background: var(--surface); color: var(--brand); }
+  button.primary:hover { background: var(--surface-hover); }
+  button.primary:disabled { opacity: 0.6; cursor: default; }
+  button.secondary { background: transparent; color: var(--on-brand-dim); }
+  button.secondary:hover { color: var(--on-brand); }
 
   #status-view {
     flex: 1; display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 12px; padding: 24px; text-align: center;
+    justify-content: center; gap: 12px; padding: 20px; text-align: center;
   }
-  #status-view .icon { font-size: 32px; }
-  #status-view .msg { font-size: 13px; color: var(--text); }
-  #status-view .err { font-size: 11px; color: var(--text-dim); word-break: break-word; }
+  #status-view .icon { font-size: 30px; }
+  #status-view .msg { font-size: 13px; color: var(--on-brand); font-weight: 600; }
+  #status-view .err { font-size: 11px; color: var(--on-brand-dim); word-break: break-word; }
   .spinner {
-    width: 22px; height: 22px; border-radius: 50%;
-    border: 3px solid var(--border); border-top-color: var(--accent);
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,0.3); border-top-color: var(--on-brand);
     animation: spin 0.7s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  .credit {
+    text-align: center; font-size: 9.5px; color: var(--on-brand-dim);
+    padding: 6px 0 10px; opacity: 0.85;
+  }
 
   .hidden { display: none !important; }
 </style>
@@ -118,36 +130,41 @@
   <div id="card">
     <header>
       <div>
-        <h1 id="header-title">Status Update</h1>
+        <h1>Status Report Generator</h1>
         <div class="sub" id="header-sub">What are you logging status for?</div>
       </div>
-      <button id="close-btn" title="Close">✕</button>
+      <div class="header-actions">
+        <button class="icon-btn" id="sheet-btn" title="Open the Google Sheet">📄</button>
+        <button class="icon-btn" id="close-btn" title="Close">✕</button>
+      </div>
     </header>
 
     <main id="main"></main>
 
-    <footer id="footer" class="hidden">
+    <footer class="form-actions hidden" id="footer">
       <button class="secondary" id="cancel-btn">Cancel</button>
       <button class="primary" id="submit-btn">Submit</button>
     </footer>
+
+    <div class="credit">Developed by Naveen Raj Sivasamy</div>
   </div>
 
+<script src="field-config.js"></script>
 <script>
   const els = {
-    title: document.getElementById('header-title'),
     sub: document.getElementById('header-sub'),
     main: document.getElementById('main'),
     footer: document.getElementById('footer'),
     submitBtn: document.getElementById('submit-btn'),
     cancelBtn: document.getElementById('cancel-btn'),
     closeBtn: document.getElementById('close-btn'),
+    sheetBtn: document.getElementById('sheet-btn'),
   };
 
   let yourName = '';
 
   function showLoading(msg) {
     els.footer.classList.add('hidden');
-    els.sub.textContent = '';
     els.main.innerHTML = `
       <div id="status-view">
         <div class="spinner"></div>
@@ -185,7 +202,6 @@
   }
 
   async function showTabPicker() {
-    els.title.textContent = 'Status Update';
     els.sub.textContent = 'What are you logging status for?';
     els.footer.classList.add('hidden');
     showLoading('Loading categories…');
@@ -204,27 +220,73 @@
     }
   }
 
+  function buildFieldInput(tab, col) {
+    const spec = (typeof fieldSpecFor === 'function' && fieldSpecFor(tab, col)) || null;
+
+    if (spec && spec.type === 'select') {
+      const select = document.createElement('select');
+      const blank = document.createElement('option');
+      blank.value = ''; blank.textContent = '— choose —';
+      select.appendChild(blank);
+      spec.options.forEach((opt) => {
+        const o = document.createElement('option');
+        o.value = opt; o.textContent = opt;
+        select.appendChild(o);
+      });
+      return select;
+    }
+
+    if (spec && spec.type === 'date') {
+      const input = document.createElement('input');
+      input.type = 'date';
+      return input;
+    }
+
+    if (spec && spec.type === 'week-auto') {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.readOnly = true;
+      input.placeholder = 'Auto-filled from Date';
+      return input;
+    }
+
+    const isLong = /notes|description|blocker|comment|detail/i.test(col);
+    const input = document.createElement(isLong ? 'textarea' : 'input');
+    if (isLong) input.rows = 2;
+    if (/name/i.test(col) && yourName) input.value = yourName;
+    return input;
+  }
+
   async function showForm(tab) {
-    els.title.textContent = tab;
-    els.sub.textContent = '';
+    els.sub.textContent = tab;
     showLoading('Loading fields…');
     try {
       const { columns } = await window.statusApp.getColumns(tab);
       els.main.innerHTML = '';
       const inputs = {};
+
       columns.forEach((col) => {
         const wrap = document.createElement('div');
         wrap.className = 'field';
         const label = document.createElement('label');
         label.textContent = col;
-        const isLong = /notes|description|blocker|comment|detail/i.test(col);
-        const input = document.createElement(isLong ? 'textarea' : 'input');
-        if (isLong) input.rows = 2;
-        if (/name/i.test(col) && yourName) input.value = yourName;
+        const input = buildFieldInput(tab, col);
         wrap.appendChild(label);
         wrap.appendChild(input);
         els.main.appendChild(wrap);
         inputs[col] = input;
+      });
+
+      // Wire up Date -> Week auto-fill for whichever columns are configured that way.
+      const spec = FIELD_CONFIG[tab] || {};
+      Object.keys(spec).forEach((col) => {
+        if (spec[col].type === 'week-auto' && inputs[spec[col].basedOn] && inputs[col]) {
+          const dateInput = inputs[spec[col].basedOn];
+          const weekInput = inputs[col];
+          const sync = () => { weekInput.value = computeWeekLabel(dateInput.value); };
+          dateInput.addEventListener('change', sync);
+          sync();
+        }
       });
 
       els.footer.classList.remove('hidden');
@@ -233,11 +295,13 @@
         els.submitBtn.disabled = true;
         els.submitBtn.textContent = 'Saving…';
         const values = {};
-        Object.entries(inputs).forEach(([k, el]) => (values[k] = el.value.trim()));
+        Object.entries(inputs).forEach(([k, el]) => (values[k] = (el.value || '').trim()));
         try {
           await window.statusApp.submitEntry(tab, values);
           showSuccess(tab);
         } catch (err) {
+          els.submitBtn.disabled = false;
+          els.submitBtn.textContent = 'Submit';
           showError(err.message || String(err), () => showForm(tab));
         }
       };
@@ -247,13 +311,13 @@
   }
 
   els.closeBtn.onclick = () => window.statusApp.hideWindow();
+  els.sheetBtn.onclick = () => window.statusApp.openSheet();
 
   window.statusApp.onOpened(async () => {
     yourName = await window.statusApp.getYourName();
     showTabPicker();
   });
 
-  // First load too, in case 'opened' already fired before listener attached.
   window.statusApp.getYourName().then((n) => (yourName = n));
   showTabPicker();
 </script>

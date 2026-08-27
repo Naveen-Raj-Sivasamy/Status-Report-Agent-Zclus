@@ -10,10 +10,14 @@
  *      GET  ?action=tabs                 -> list of sheet tab names
  *      GET  ?action=columns&tab=NAME     -> header row for that tab
  *      POST { token, tab, values{...} }  -> appends one row to that tab
+ *    tabs/columns responses are cached for CACHE_SECONDS since they rarely
+ *    change — this is most of the speed-up if things feel slow. Run
+ *    clearCache() manually after adding/renaming a tab or column if you
+ *    want the change to show up immediately instead of waiting it out.
  * 2. Two time-driven jobs you wire up once via setupTriggers():
  *      sendFridayReminder()      -> 6pm Friday, nudges the team
- *      compileAndSendReport()    -> ~11pm Friday, emails the whole
- *                                    spreadsheet (as .xlsx) to RECIPIENTS
+ *      compileAndSendReport()    -> ~11pm Friday, emails THIS WEEK'S rows
+ *                                    only (Mon-Fri), as a .xlsx, to RECIPIENTS
  *
  * Each sheet tab's row 1 must be column headers. Any tab whose name
  * starts with "_" is treated as config/internal and hidden from the
@@ -28,8 +32,7 @@
 var SHARED_SECRET = 'FnKzihGF3xrFOthBuApKgGAQVd1s1aKQ';
 
 // Who gets the Friday reminder + the final compiled report.
-// Add more addresses any time — no redeploy needed for RECIPIENTS/REMINDER_RECIPIENTS,
-// just re-run setupTriggers() is NOT required for this, edits take effect immediately.
+// Add more addresses any time — no redeploy needed for RECIPIENTS/REMINDER_RECIPIENTS.
 var REPORT_RECIPIENTS = [
   'Suryaraj.Rathanasamy@fairview.org',
   'Amulya.Kumar@fairview.org',
@@ -49,8 +52,16 @@ var TEAMS_WEBHOOK_URL = '';
 var TIMESTAMP_COLUMN = 'Timestamp';
 
 // Names of tabs to exclude from the widget's tab list (besides any
-// starting with "_", which are always excluded).
+// starting with "_", which are always excluded). This one has cumulative
+// formulas, not per-entry data, so it doesn't belong in the input flow —
+// it's still emailed as-is if you reference it manually, just never shown
+// as a "log an entry" choice.
 var HIDDEN_TABS = ['Weekly_Monthly_Summary'];
+
+// How long tabs/columns responses are cached (seconds). Higher = faster
+// widget, but slower to notice a newly added tab/column. Run clearCache()
+// after such a change if you don't want to wait this out.
+var CACHE_SECONDS = 300;
 
 // =============================== API ======================================
 
@@ -58,11 +69,12 @@ function doGet(e) {
   var action = e.parameter.action;
   try {
     if (action === 'tabs') {
-      return jsonOut({ ok: true, tabs: listVisibleTabs() });
+      return jsonOut({ ok: true, tabs: cached('tabs', listVisibleTabs) });
     }
     if (action === 'columns') {
       var tab = e.parameter.tab;
-      return jsonOut({ ok: true, tab: tab, columns: getColumns(tab) });
+      var columns = cached('columns:' + tab, function () { return getColumns(tab); });
+      return jsonOut({ ok: true, tab: tab, columns: columns });
     }
     return jsonOut({ ok: true, message: 'Status Report Tracker Agent API is running.' });
   } catch (err) {
@@ -98,6 +110,15 @@ function doPost(e) {
   } catch (err) {
     return jsonOut({ ok: false, error: String(err) });
   }
+}
+
+/** Run manually any time you add/rename a tab or column and don't want
+ * to wait out CACHE_SECONDS for the widget to notice. */
+function clearCache() {
+  CacheService.getScriptCache().removeAll(
+    listVisibleTabsUncached().map(function (t) { return 'columns:' + t; }).concat(['tabs'])
+  );
+  Logger.log('Cache cleared.');
 }
 
 // ============================ SCHEDULED JOBS ==============================
@@ -154,56 +175,94 @@ function sendFridayReminder() {
   }
 }
 
-/** Friday ~11pm: export the whole sheet as .xlsx and email it out. */
+/**
+ * Friday ~11pm: build a fresh workbook containing only THIS WEEK's rows
+ * (Monday 00:00 through now, per TIMESTAMP_COLUMN) for each visible tab,
+ * export it as .xlsx, email it, then discard the temp file.
+ */
 function compileAndSendReport() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var fileId = ss.getId();
-  var url =
-    'https://docs.google.com/spreadsheets/d/' + fileId + '/export?format=xlsx';
-  var token = ScriptApp.getOAuthToken();
+  var range = getCurrentWeekRange();
+  var tempName = ss.getName() + ' — Week of ' +
+    Utilities.formatDate(range.start, Session.getScriptTimeZone(), 'MMM d, yyyy');
 
-  var response = UrlFetchApp.fetch(url, {
-    headers: { Authorization: 'Bearer ' + token },
-    muteHttpExceptions: true,
+  var temp = SpreadsheetApp.create(tempName);
+  var tabNames = listVisibleTabsUncached();
+
+  tabNames.forEach(function (tabName, i) {
+    var source = getSheetByName(tabName);
+    var headers = getHeaderRow(source);
+    var tsIndex = headers.indexOf(TIMESTAMP_COLUMN);
+    var lastRow = source.getLastRow();
+
+    var rows = [];
+    if (lastRow > 1) {
+      var all = source.getRange(2, 1, lastRow - 1, headers.length).getValues();
+      rows = tsIndex === -1
+        ? all // no Timestamp column to filter by — include everything
+        : all.filter(function (r) {
+            var ts = r[tsIndex];
+            return ts instanceof Date && ts >= range.start && ts <= range.end;
+          });
+    }
+
+    var dest = i === 0 ? temp.getSheets()[0].setName(tabName) : temp.insertSheet(tabName);
+    dest.getRange(1, 1, 1, headers.length).setValues([headers]);
+    if (rows.length) {
+      dest.getRange(2, 1, rows.length, headers.length).setValues(rows);
+    }
   });
 
-  if (response.getResponseCode() !== 200) {
-    // Fall back to alerting the recipients that the export failed, rather
-    // than failing silently.
-    REPORT_RECIPIENTS.forEach(function (addr) {
-      MailApp.sendEmail(
-        addr,
-        'Status report export FAILED',
-        'The weekly status report could not be exported automatically. ' +
-          'Please check the sheet directly: ' + ss.getUrl()
-      );
-    });
-    return;
-  }
+  SpreadsheetApp.flush();
+  var blob = DriveApp.getFileById(temp.getId())
+    .getAs(MimeType.MICROSOFT_EXCEL)
+    .setName(tempName + '.xlsx');
 
-  var blob = response.getBlob().setName(ss.getName() + '.xlsx');
-  var subject = 'Weekly Status Report — ' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'MMM d, yyyy');
-  var body = 'Attached is this week\'s status report.\n\nSheet: ' + ss.getUrl();
+  var subject = 'Weekly Status Report — ' +
+    Utilities.formatDate(range.start, Session.getScriptTimeZone(), 'MMM d') + ' to ' +
+    Utilities.formatDate(range.end, Session.getScriptTimeZone(), 'MMM d, yyyy');
+  var body = 'Attached is this week\'s status report (' +
+    Utilities.formatDate(range.start, Session.getScriptTimeZone(), 'MMM d') + '–' +
+    Utilities.formatDate(range.end, Session.getScriptTimeZone(), 'MMM d') + ').\n\n' +
+    'Full sheet (all history): ' + ss.getUrl();
 
   REPORT_RECIPIENTS.forEach(function (addr) {
-    MailApp.sendEmail({
-      to: addr,
-      subject: subject,
-      body: body,
-      attachments: [blob],
-    });
+    MailApp.sendEmail({ to: addr, subject: subject, body: body, attachments: [blob] });
   });
+
+  DriveApp.getFileById(temp.getId()).setTrashed(true); // clean up the temp file
+}
+
+/** Monday 00:00:00 of the current week through right now. */
+function getCurrentWeekRange() {
+  var now = new Date();
+  var dayIndex = (now.getDay() + 6) % 7; // Monday=0 ... Sunday=6
+  var monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayIndex, 0, 0, 0);
+  return { start: monday, end: now };
 }
 
 // ============================== HELPERS ===================================
 
-function listVisibleTabs() {
+function cached(key, computeFn) {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get(key);
+  if (hit !== null) return JSON.parse(hit);
+  var value = computeFn();
+  cache.put(key, JSON.stringify(value), CACHE_SECONDS);
+  return value;
+}
+
+function listVisibleTabsUncached() {
   return SpreadsheetApp.getActiveSpreadsheet()
     .getSheets()
     .map(function (s) { return s.getName(); })
     .filter(function (name) {
       return name.indexOf('_') !== 0 && HIDDEN_TABS.indexOf(name) === -1;
     });
+}
+
+function listVisibleTabs() {
+  return listVisibleTabsUncached();
 }
 
 function getSheetByName(name) {

@@ -6,5 +6,8 @@ contextBridge.exposeInMainWorld('statusApp', {
   submitEntry: (tab, values) => ipcRenderer.invoke('submit-entry', { tab, values }),
   getYourName: () => ipcRenderer.invoke('get-your-name'),
   hideWindow: () => ipcRenderer.invoke('hide-window'),
+  openSheet: () => ipcRenderer.invoke('open-sheet'),
+  fabClicked: () => ipcRenderer.invoke('fab-clicked'),
+  showFabMenu: () => ipcRenderer.invoke('show-fab-menu'),
   onOpened: (callback) => ipcRenderer.on('opened', callback),
 });

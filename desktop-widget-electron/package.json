@@ -13,7 +13,7 @@
     "appId": "org.fairview.statusupdate",
     "productName": "StatusUpdate",
     "directories": { "output": "dist" },
-    "files": ["main.js", "preload.js", "renderer/**/*", "package.json"],
+    "files": ["main.js", "preload.js", "renderer/**/*", "build/**/*", "package.json"],
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico"

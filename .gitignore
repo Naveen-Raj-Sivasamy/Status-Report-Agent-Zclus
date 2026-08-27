@@ -1,0 +1,7 @@
+desktop-widget/config.json
+desktop-widget/build/
+desktop-widget/dist/
+desktop-widget/*.spec
+__pycache__/
+*.pyc
+.DS_Store

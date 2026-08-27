@@ -141,6 +141,31 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  .result-view { position: relative; overflow: visible; }
+  .result-badge {
+    width: 88px; height: 88px; border-radius: 50%; display: flex;
+    align-items: center; justify-content: center; font-size: 46px; font-weight: 800;
+    animation: pop-in 0.5s cubic-bezier(.34,1.56,.64,1);
+  }
+  .result-badge.success { background: rgba(107, 240, 160, 0.18); color: #6bf0a0; }
+  .result-badge.fail { background: rgba(255, 120, 120, 0.18); color: #ff8a8a; }
+  @keyframes pop-in {
+    0% { transform: scale(0); opacity: 0; }
+    60% { transform: scale(1.18); opacity: 1; }
+    100% { transform: scale(1); }
+  }
+  .result-title { font-size: 17px; font-weight: 800; color: var(--on-brand); }
+  .result-sub { font-size: 12px; color: var(--on-brand-dim); font-weight: 600; max-width: 280px; word-break: break-word; }
+  .confetti-piece {
+    position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; border-radius: 2px;
+    opacity: 0; pointer-events: none;
+    animation: confetti-burst 950ms ease-out forwards;
+  }
+  @keyframes confetti-burst {
+    0% { transform: translate(-50%, -50%) rotate(0deg) scale(0.6); opacity: 1; }
+    100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)) scale(1); opacity: 0; }
+  }
+
   .credit {
     text-align: center; font-size: 9.5px; color: var(--on-brand-dim);
     padding: 6px 0 10px; opacity: 0.9; font-weight: 700;
@@ -207,21 +232,48 @@
     document.getElementById('retry-btn').onclick = retryFn;
   }
 
-  function showSuccess(tab) {
-    els.footer.classList.add('hidden');
-    els.sub.textContent = '';
-    els.main.innerHTML = `
-      <div id="status-view">
-        <div class="icon">✅</div>
-        <div class="msg">Saved to "${escapeHtml(tab)}"</div>
-      </div>`;
-    setTimeout(() => window.statusApp.hideWindow(), 1100);
-  }
-
   function escapeHtml(s) {
     const d = document.createElement('div');
     d.textContent = String(s);
     return d.innerHTML;
+  }
+
+  function launchConfetti(container) {
+    const colors = ['#ffb700', '#ffffff', '#6bf0a0', '#ffd166', '#ff8fa3', '#8ecbff'];
+    for (let i = 0; i < 26; i++) {
+      const piece = document.createElement('div');
+      piece.className = 'confetti-piece';
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 70 + Math.random() * 70;
+      piece.style.setProperty('--tx', `${Math.cos(angle) * distance}px`);
+      piece.style.setProperty('--ty', `${Math.sin(angle) * distance - 20}px`);
+      piece.style.setProperty('--rot', `${Math.random() * 480 - 240}deg`);
+      piece.style.background = colors[i % colors.length];
+      piece.style.animationDelay = `${Math.random() * 140}ms`;
+      container.appendChild(piece);
+    }
+  }
+
+  // Big, unmistakable pass/fail screen — used for both status-entry saves
+  // and the weekly report send, so there's never any doubt about the outcome.
+  function showResult({ success, title, subtitle, doneLabel, onDone }) {
+    els.footer.classList.add('hidden');
+    els.sub.textContent = '';
+    els.main.innerHTML = `
+      <div id="status-view" class="result-view">
+        <div class="result-badge ${success ? 'success' : 'fail'}">${success ? '✓' : '✕'}</div>
+        <div class="result-title">${escapeHtml(title)}</div>
+        ${subtitle ? `<div class="result-sub">${escapeHtml(subtitle)}</div>` : ''}
+        ${onDone ? `<button class="primary" id="result-done-btn" style="margin-top:4px;">${escapeHtml(doneLabel || 'Done')}</button>` : ''}
+      </div>`;
+    const view = document.getElementById('status-view');
+    if (success) launchConfetti(view);
+    if (onDone) document.getElementById('result-done-btn').onclick = onDone;
+  }
+
+  function showSuccess(tab) {
+    showResult({ success: true, title: 'Submitted Successfully!', subtitle: `Saved to "${tab}"` });
+    setTimeout(() => window.statusApp.hideWindow(), 1900);
   }
 
   function showReportConfirm() {
@@ -241,14 +293,21 @@
       showLoading('Sending report…');
       try {
         await window.statusApp.sendReportNow();
-        els.main.innerHTML = `
-          <div id="status-view">
-            <div class="icon">✅</div>
-            <div class="msg">Report sent</div>
-          </div>`;
-        setTimeout(showTabPicker, 1300);
+        showResult({
+          success: true,
+          title: 'Submitted Successfully!',
+          subtitle: "This week's report is on its way to everyone's inbox.",
+          doneLabel: 'Done',
+          onDone: showTabPicker,
+        });
       } catch (err) {
-        showError(err.message || String(err), showReportConfirm);
+        showResult({
+          success: false,
+          title: 'Failed',
+          subtitle: err.message || String(err),
+          doneLabel: 'Try again',
+          onDone: showReportConfirm,
+        });
       }
     };
   }

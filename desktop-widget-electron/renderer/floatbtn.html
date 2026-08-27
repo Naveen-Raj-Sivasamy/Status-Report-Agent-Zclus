@@ -7,23 +7,21 @@
     margin: 0; padding: 0; width: 100%; height: 100%;
     background: transparent;
     overflow: hidden;
-    -webkit-app-region: drag; /* whole button is the drag handle */
   }
   #btn {
     width: 56px; height: 56px; border-radius: 50%;
     background: #6e1b2c;
     border: 2px solid rgba(255,255,255,0.85);
-    box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
     -webkit-user-select: none;
+    -webkit-app-region: drag; /* set directly on the element under the cursor */
   }
   #btn img {
     width: 34px; height: 34px; object-fit: contain;
-    -webkit-app-region: no-drag; /* clicks on the icon still toggle, drag still works via body */
-    pointer-events: none; /* let clicks pass through to #btn's own handler */
+    pointer-events: none; /* let mouse events fall through to #btn */
   }
-  #btn:active { transform: scale(0.94); }
 </style>
 </head>
 <body>
@@ -33,11 +31,16 @@
 <script>
   const btn = document.getElementById('btn');
   let downAt = 0;
+  let downPos = { x: 0, y: 0 };
 
-  btn.addEventListener('mousedown', () => { downAt = Date.now(); });
-  btn.addEventListener('mouseup', () => {
-    // Treat as a click only if it wasn't a drag (quick press+release).
-    if (Date.now() - downAt < 300) window.statusApp.fabClicked();
+  btn.addEventListener('mousedown', (e) => {
+    downAt = Date.now();
+    downPos = { x: e.screenX, y: e.screenY };
+  });
+  btn.addEventListener('mouseup', (e) => {
+    const moved = Math.hypot(e.screenX - downPos.x, e.screenY - downPos.y);
+    const elapsed = Date.now() - downAt;
+    if (moved < 4 && elapsed < 400) window.statusApp.fabClicked();
   });
   btn.addEventListener('contextmenu', (e) => {
     e.preventDefault();

@@ -109,9 +109,8 @@ function createPopup() {
     },
   });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.on('blur', () => {
-    if (!win.webContents.isDevToolsOpened()) win.hide();
-  });
+  // Deliberately no hide-on-blur: closing is only via the ✕ button, so
+  // switching to another app to look something up doesn't lose your form.
   return win;
 }
 
@@ -133,8 +132,14 @@ function positionPopupNearWindow(refBounds) {
 }
 
 function toggleWindow() {
-  if (popup.isVisible()) {
+  if (popup.isVisible() && popup.isFocused()) {
     popup.hide();
+    return;
+  }
+  if (popup.isVisible() && !popup.isFocused()) {
+    // It's open but buried behind another app — bring it back instead of
+    // hiding it, so clicking the button always gets you back to your form.
+    popup.focus();
     return;
   }
   const refBounds = floatBtn ? floatBtn.getBounds() : tray.getBounds();
@@ -177,11 +182,12 @@ function createFloatButton() {
     show: false,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
     alwaysOnTop: true,
     resizable: false,
     movable: true,
     skipTaskbar: true,
-    hasShadow: true,
+    hasShadow: false, // native window shadow renders as a square around our round content — CSS box-shadow handles it instead
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

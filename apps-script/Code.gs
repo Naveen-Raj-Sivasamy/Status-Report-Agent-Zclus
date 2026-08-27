@@ -36,7 +36,10 @@ var SHARED_SECRET = 'FnKzihGF3xrFOthBuApKgGAQVd1s1aKQ';
 var REPORT_RECIPIENTS = [
   'Suryaraj.Rathanasamy@fairview.org',
   'Amulya.Kumar@fairview.org',
-  'nav13418@fairview.org'
+  'nav13418@fairview.org',
+  'naveenrajsivasamy@gmail.com',
+  'naveen@zclus.com',
+  'amulya@zclus.com'
 ];
 
 var REMINDER_RECIPIENTS = REPORT_RECIPIENTS; // usually the same list
@@ -109,8 +112,13 @@ function doPost(e) {
     }
 
     if (body.action === 'sendReportNow') {
-      compileAndSendReport();
+      compileAndSendReport(parseRangeFromRequest(body));
       return jsonOut({ ok: true, message: 'Report sent.' });
+    }
+
+    if (body.action === 'downloadReport') {
+      var file = getReportFileBase64(parseRangeFromRequest(body));
+      return jsonOut({ ok: true, fileName: file.fileName, base64: file.base64 });
     }
 
     if (!body.tab) {

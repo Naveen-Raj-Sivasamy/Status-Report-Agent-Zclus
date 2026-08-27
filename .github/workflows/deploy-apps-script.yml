@@ -1,0 +1,58 @@
+name: Deploy Apps Script
+
+# Pushes apps-script/Code.gs + appsscript.json to the live Apps Script
+# project and creates a new deployment version, keeping the SAME
+# deployment ID (so the widget's WEBHOOK_URL never has to change).
+#
+# One-time setup required (see README.md "Continuous deployment" section):
+#   1. Run `clasp login` on your own machine, then paste the resulting
+#      credentials file's contents into a repo secret named CLASP_CREDENTIALS.
+#   2. Make sure "Google Apps Script API" is turned ON at
+#      https://script.google.com/home/usersettings for the account that ran
+#      clasp login (it must be the account that owns/edits this script).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps-script/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      # The existing deployment's ID — same one the desktop widget's
+      # WEBHOOK_URL already points to. If you ever delete and recreate the
+      # deployment in the Apps Script UI, update this to the new ID.
+      DEPLOYMENT_ID: AKfycbywbsjd7svRa4xOv-LPnsucf0RBjw_hF3yTP--kLpgH5YGfq9YlZGNLw2Q5VJhRCws5lA
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install clasp
+        run: npm install -g @google/clasp
+
+      - name: Restore clasp credentials
+        env:
+          CLASP_CREDENTIALS: ${{ secrets.CLASP_CREDENTIALS }}
+        run: |
+          if [ -z "$CLASP_CREDENTIALS" ]; then
+            echo "::error::CLASP_CREDENTIALS secret is not set. See README.md for setup steps."
+            exit 1
+          fi
+          echo "$CLASP_CREDENTIALS" > "$HOME/.clasprc.json"
+
+      - name: Push script files to Apps Script
+        working-directory: apps-script
+        run: clasp push --force
+
+      - name: Create new deployment
+        working-directory: apps-script
+        run: clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "CI deploy ${{ github.sha }}"

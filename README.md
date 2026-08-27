@@ -182,25 +182,65 @@ If you ever change `WEBHOOK_URL`, `TOKEN`, or `SHEET_URL`, update
 (this is the one thing that isn't picked up automatically, since it's
 baked in at build time).
 
-### Letting teammates know a new version exists
+### Continuous deployment (CI/CD) — everything below is automatic
 
-The app shows its version number (e.g. `v1.1.0`) next to the title, and
-checks once per launch whether a newer one exists. When you cut a new
-`.exe` for a code/UI change (not just a data change — those apply on their
-own within a few minutes, see the note at the top of `Code.gs`):
+Two GitHub Actions workflows do all of this for you now. You never need
+to open the Apps Script editor by hand, and you never need to build the
+installer on your own machine again.
 
-1. Bump `"version"` in `desktop-widget-electron/package.json`.
-2. Rebuild (`npm run build:win`) and put the new `.exe` somewhere
-   teammates can grab it from (shared drive, Slack, wherever).
-3. Open the Google Sheet, unhide and open the `_Config` tab (created
-   automatically the first time anyone used the app — right-click any tab
-   → "Unhide sheet" if you don't see it), and set:
-   - `LatestVersion` → the version you just built (e.g. `1.1.0`)
-   - `DownloadUrl` → a link to the new `.exe`
+**`.github/workflows/deploy-apps-script.yml`** — runs on every push to
+`main` that touches `apps-script/**`. It pushes `Code.gs` /
+`appsscript.json` to the live Apps Script project via
+[`clasp`](https://github.com/google/clasp) and creates a new deployment
+version, re-using the SAME deployment ID the widget already talks to — so
+the web app URL never changes and nobody needs to update `config.json`.
 
-That's it — no redeploy needed, since this reads live sheet data. Within
-a few minutes, everyone still on the old version sees a banner in the app
-telling them to update, with a button that opens `DownloadUrl` directly.
+**`.github/workflows/build-release.yml`** — runs whenever you push a git
+tag like `v1.3.0`. It builds the Windows installer on a clean
+`windows-latest` runner, publishes it as a GitHub Release asset named
+`StatusUpdate-Setup.exe`, and calls the Apps Script web app's
+`setLatestVersion` action so the `_Config` tab's `LatestVersion` updates
+itself. The release asset filename never changes between releases, so this
+link always points at the newest build and is what's stored as
+`DownloadUrl` (set once, permanently):
+
+```
+https://github.com/<owner>/<repo>/releases/latest/download/StatusUpdate-Setup.exe
+```
+
+**One-time setup** (only needed once, by whoever owns this repo):
+
+1. **Turn on the Apps Script API** for the Google account that owns the
+   script: https://script.google.com/home/usersettings → toggle it on.
+2. **Authenticate clasp locally**: on your own machine, run
+   `npx @google/clasp login` (this opens a browser for you to log into the
+   same Google account). It writes a credentials file
+   (`~/.clasprc.json` on macOS/Linux, `%USERPROFILE%\.clasprc.json` on
+   Windows — clasp prints the exact path when it finishes).
+3. Copy that file's entire contents and paste them into a new repo secret
+   named **`CLASP_CREDENTIALS`** (GitHub repo → Settings → Secrets and
+   variables → Actions → New repository secret).
+4. Copy the entire contents of `desktop-widget-electron/config.template.json`
+   into a second repo secret named **`CONFIG_TEMPLATE_JSON`**.
+5. Set `_Config`'s `DownloadUrl` (see step 2 above) to the `releases/latest/download/...`
+   link once — it never needs to change again.
+
+**Shipping a new version from then on:**
+
+- **Backend-only change** (Code.gs): just `git push` to `main`. Deployed
+  automatically within ~1 minute. (A pure *data* change — like editing
+  `REPORT_RECIPIENTS` — also applies within a few minutes with no push at
+  all needed, per the note at the top of `Code.gs`... but pushing is still
+  how the change reaches everyone else's copy of the repo, so push anyway.)
+- **App/UI change** (needs a new installer): bump `"version"` in
+  `desktop-widget-electron/package.json`, commit, then:
+  ```
+  git tag v1.3.0
+  git push origin v1.3.0
+  ```
+  That's it — the build, the GitHub Release, and the `LatestVersion` bump
+  all happen automatically. Everyone still on an older version sees the
+  in-app update banner within a few minutes.
 
 ## 5. Adjust the schedule
 

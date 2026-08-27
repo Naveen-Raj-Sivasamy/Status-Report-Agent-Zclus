@@ -1,0 +1,75 @@
+name: Build and Release Installer
+
+# Builds the Windows installer on a clean Windows runner and publishes it
+# as a GitHub Release asset named StatusUpdate-Setup.exe. Because that
+# filename never changes between releases, this permanent link always
+# points at the newest build:
+#   https://github.com/<owner>/<repo>/releases/latest/download/StatusUpdate-Setup.exe
+# That link is what's stored in the Google Sheet's _Config tab as
+# DownloadUrl (set once, never needs updating again).
+#
+# To ship a new version:
+#   1. Bump "version" in desktop-widget-electron/package.json
+#   2. Commit it, then: git tag v<version> && git push origin v<version>
+# This workflow builds, releases, and tells the running app about the new
+# version automatically (via the setLatestVersion action in Code.gs).
+#
+# One-time setup required (see README.md "Continuous deployment" section):
+#   Add a repo secret named CONFIG_TEMPLATE_JSON containing the exact JSON
+#   from desktop-widget-electron/config.template.json (WEBHOOK_URL/TOKEN/SHEET_URL).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop-widget-electron
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Write shared config
+        shell: bash
+        env:
+          CONFIG_TEMPLATE_JSON: ${{ secrets.CONFIG_TEMPLATE_JSON }}
+        run: |
+          if [ -z "$CONFIG_TEMPLATE_JSON" ]; then
+            echo "::error::CONFIG_TEMPLATE_JSON secret is not set. See README.md for setup steps."
+            exit 1
+          fi
+          echo "$CONFIG_TEMPLATE_JSON" > config.template.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installer
+        run: npm run build:win
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop-widget-electron/dist/StatusUpdate-Setup.exe
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+
+      - name: Tell the app about the new version
+        shell: bash
+        run: |
+          WEBHOOK_URL=$(node -pe "require('./config.template.json').WEBHOOK_URL")
+          TOKEN=$(node -pe "require('./config.template.json').TOKEN")
+          VERSION="${GITHUB_REF_NAME#v}"
+          curl -sf -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"token\":\"$TOKEN\",\"action\":\"setLatestVersion\",\"version\":\"$VERSION\"}"

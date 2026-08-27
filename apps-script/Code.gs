@@ -121,6 +121,25 @@ function doPost(e) {
       return jsonOut({ ok: true, fileName: file.fileName, base64: file.base64 });
     }
 
+    /** Called by the build-release CI workflow right after it publishes a
+     * new installer, so the widget's "update available" banner and its
+     * DownloadUrl-driven "Get it" button stay in sync automatically. */
+    if (body.action === 'setLatestVersion') {
+      if (!body.version) {
+        return jsonOut({ ok: false, error: 'Missing "version".' });
+      }
+      var cfgSheet = ensureConfigTab();
+      var cfgData = cfgSheet.getDataRange().getValues();
+      var updated = false;
+      for (var vi = 1; vi < cfgData.length; vi++) {
+        if (String(cfgData[vi][0]).trim() === 'LatestVersion') {
+          cfgSheet.getRange(vi + 1, 2).setValue(body.version);
+          updated = true;
+        }
+      }
+      return jsonOut({ ok: true, message: 'LatestVersion set to ' + body.version, updated: updated });
+    }
+
     if (!body.tab) {
       return jsonOut({ ok: false, error: 'Missing "tab".' });
     }

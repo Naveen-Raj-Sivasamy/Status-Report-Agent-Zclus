@@ -67,35 +67,60 @@ most tenants for this (unlike a full Azure app registration).
 
 ## 3. Configure and run the desktop widget
 
+There are two widgets in this repo — pick one:
+
+- **`desktop-widget-electron/`** (recommended) — modern custom UI, true
+  floating tray icon. Needs Node.js.
+- **`desktop-widget/`** — plain Python/Tkinter version, works but looks
+  basic. Simpler prerequisites if Node.js isn't an option.
+
+### Electron version (recommended)
+
 ```
-cd desktop-widget
+cd desktop-widget-electron
 cp config.example.json config.json
 ```
 
 Edit `config.json`:
 - `WEBHOOK_URL` — the `.../exec` URL from step 2.5.
 - `TOKEN` — must match `SHARED_SECRET` in `Code.gs`.
-- `YOUR_NAME` — optional, prefills a "Name" field if one of your columns
-  is named `Name` or `Your Name`.
+- `YOUR_NAME` — optional, prefills any field whose column header contains
+  "name".
 
-Run it directly (needs Python 3.9+):
+Run it (needs [Node.js](https://nodejs.org) 18+):
+
+```
+npm install
+npm start
+```
+
+A small icon appears in the system tray (Windows) / menu bar (macOS).
+Click it → a dark, rounded popup opens near the icon → pick a tab → fill
+in the form → Submit. Click the icon again (or click away) to dismiss it.
+
+### Python/Tkinter version (fallback)
+
+```
+cd desktop-widget
+cp config.example.json config.json
+```
+
+Same `config.json` fields as above. Run it directly (needs Python 3.9+):
 
 ```
 pip install -r requirements.txt
 python status_widget.py
 ```
 
-A small icon appears in the system tray (Windows) / menu bar (macOS).
-Click it → **Submit status update** → pick a tab → fill in the form →
-Submit.
-
 ## 4. Package it for teammates
 
-PyInstaller doesn't cross-compile, so build on each OS:
+Neither PyInstaller nor electron-builder cross-compiles, so build on each OS:
 
-- **Windows**: run `build_windows.bat` on a Windows machine →
+- **Electron, Windows**: `cd desktop-widget-electron && npm install && npm run build:win` → `dist\StatusUpdate Setup *.exe`.
+- **Electron, Mac**: `cd desktop-widget-electron && npm install && npm run build:mac` → `dist/StatusUpdate-*.dmg`.
+- **Python, Windows**: run `build_windows.bat` on a Windows machine →
   `dist\StatusUpdate.exe`.
-- **Mac**: run `build_mac.sh` on a Mac → `dist/StatusUpdate.app`.
+- **Python, Mac**: run `build_mac.sh` on a Mac → `dist/StatusUpdate.app`.
 
 Give each teammate the built app **plus their own `config.json`** in the
 same folder (everyone shares the same `WEBHOOK_URL`/`TOKEN` — it's the
@@ -106,9 +131,9 @@ These builds are unsigned (no paid code-signing certificate), so:
 - **Mac**: Gatekeeper will block it — right-click the app → "Open" the
   first time.
 
-If that friction is a problem, teammates can instead just run
-`python status_widget.py` directly if they have Python installed — no
-build step needed.
+If that friction is a problem, teammates can instead just run the app
+from source (`npm start` or `python status_widget.py`) if they have
+Node.js or Python installed — no build step needed.
 
 ## 5. Adjust the schedule
 

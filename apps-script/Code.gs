@@ -48,8 +48,14 @@ var REMINDER_RECIPIENTS = REPORT_RECIPIENTS; // usually the same list
 var TEAMS_WEBHOOK_URL = '';
 
 // Column name (must match a header in every tab) auto-filled with the
-// submission time. Leave as-is unless your sheet uses a different name.
+// submission time, IF such a column exists. None of the current tabs have
+// one, so this is currently a no-op — safe to ignore unless you add one.
 var TIMESTAMP_COLUMN = 'Timestamp';
+
+// The column the weekly report actually filters by: each tab's "Date"
+// field (the one the widget's date picker fills in), matched
+// case-insensitively. This is what decides "this week's rows".
+var REPORT_DATE_COLUMN = 'Date';
 
 // Names of tabs to exclude from the widget's tab list (besides any
 // starting with "_", which are always excluded). This one has cumulative
@@ -212,7 +218,7 @@ function sendFridayReminder() {
 
 /**
  * Friday ~11pm: build a fresh workbook containing only THIS WEEK's rows
- * (Monday 00:00 through now, per TIMESTAMP_COLUMN) for each visible tab,
+ * (Monday 00:00 through now, per REPORT_DATE_COLUMN) for each visible tab,
  * export it as .xlsx, email it, then discard the temp file.
  */
 function compileAndSendReport() {
@@ -227,17 +233,18 @@ function compileAndSendReport() {
   tabNames.forEach(function (tabName, i) {
     var source = getSheetByName(tabName);
     var headers = getHeaderRow(source);
-    var tsIndex = headers.indexOf(TIMESTAMP_COLUMN);
+    var dateIndex = findColumnIndex(headers, REPORT_DATE_COLUMN);
     var lastRow = source.getLastRow();
 
     var rows = [];
     if (lastRow > 1) {
       var all = source.getRange(2, 1, lastRow - 1, headers.length).getValues();
-      rows = tsIndex === -1
-        ? all // no Timestamp column to filter by — include everything
+      rows = dateIndex === -1
+        ? all // no Date column on this tab — nothing to filter by, include everything
         : all.filter(function (r) {
-            var ts = r[tsIndex];
-            return ts instanceof Date && ts >= range.start && ts <= range.end;
+            var raw = r[dateIndex];
+            var d = raw instanceof Date ? raw : new Date(raw);
+            return !isNaN(d.getTime()) && d >= range.start && d <= range.end;
           });
     }
 
@@ -334,15 +341,19 @@ function getHeaderRow(sheet) {
 /** Next value for a numbered column (e.g. "Cleanup Number"): the highest
  * existing number in that column, plus one. Not cached — it has to reflect
  * every submission so far, including ones from a few seconds ago. */
+function findColumnIndex(headers, columnName) {
+  var target = String(columnName).trim().toLowerCase();
+  for (var i = 0; i < headers.length; i++) {
+    if (String(headers[i]).trim().toLowerCase() === target) return i;
+  }
+  return -1;
+}
+
 function getNextSequenceNumber(tabName, columnName) {
   var sheet = getSheetByName(tabName);
   if (!sheet) return 1;
   var headers = getHeaderRow(sheet);
-  var target = String(columnName).trim().toLowerCase();
-  var colIndex = -1;
-  for (var i = 0; i < headers.length; i++) {
-    if (String(headers[i]).trim().toLowerCase() === target) { colIndex = i; break; }
-  }
+  var colIndex = findColumnIndex(headers, columnName);
   if (colIndex === -1) return 1;
 
   var lastRow = sheet.getLastRow();

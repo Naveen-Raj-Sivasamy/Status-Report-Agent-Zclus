@@ -25,7 +25,11 @@
     user-select: none;
   }
   #card {
-    height: 100%;
+    /* No fixed/percentage height: this element must size itself to its
+       actual content so scrollHeight reports a true value — the JS at
+       the bottom of this file reads that and resizes the real OS window
+       to match. (A percentage height here would make scrollHeight just
+       echo back whatever the window's current size already is.) */
     display: flex;
     flex-direction: column;
     background: var(--brand);
@@ -52,7 +56,7 @@
   }
   .icon-btn:hover { background: rgba(255,255,255,0.24); }
 
-  main { flex: 1; overflow-y: auto; padding: 6px 16px 12px; }
+  main { overflow-y: auto; padding: 6px 16px 12px; max-height: 420px; }
 
   .tab-btn {
     width: 100%; text-align: left;
@@ -689,6 +693,20 @@
   window.statusApp.getYourName().then((n) => (yourName = n));
   checkAppVersion();
   showTabPicker();
+
+  // Keep the actual OS window sized to whatever's on screen right now,
+  // instead of a fixed height that leaves dead space for a short screen
+  // (a few tabs) or clips a tall one (report options with a big date
+  // picker). Fires on every render automatically, no need to call it
+  // from each show*() function by hand.
+  const cardEl = document.getElementById('card');
+  let resizeTimer = null;
+  new ResizeObserver(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      window.statusApp.resizeWindow(cardEl.scrollHeight);
+    }, 30);
+  }).observe(cardEl);
 </script>
 </body>
 </html>

@@ -195,6 +195,26 @@ ipcMain.handle('open-external', (_e, url) => {
   if (url) shell.openExternal(url);
 });
 ipcMain.handle('hide-window', () => hidePopup());
+
+// The popup's content height varies a lot (4 tabs vs. 12, a short error
+// screen vs. the report-options form) — rather than a fixed window height
+// that leaves a dead gap for short screens or clips a tall one, the
+// renderer measures its own content and asks us to resize to fit, on
+// every render. Clamped so it can never grow absurdly tall or shrink to
+// nothing; content beyond the max just scrolls (main already does that).
+const MIN_POPUP_HEIGHT = 220;
+const MAX_POPUP_HEIGHT = 640;
+ipcMain.on('resize-window', (_e, height) => {
+  if (!popup) return;
+  const clamped = Math.max(MIN_POPUP_HEIGHT, Math.min(MAX_POPUP_HEIGHT, Math.round(height)));
+  const [width, currentHeight] = popup.getSize();
+  if (clamped === currentHeight) return;
+  popup.setSize(width, clamped);
+  if (popup.isVisible()) {
+    const refBounds = floatBtn ? floatBtn.getBounds() : tray.getBounds();
+    positionPopupNearWindow(refBounds);
+  }
+});
 ipcMain.handle('open-sheet', () => {
   if (config.SHEET_URL) shell.openExternal(config.SHEET_URL);
 });
@@ -248,7 +268,7 @@ function createSetupWindow() {
 function createPopup() {
   const win = new BrowserWindow({
     width: 380,
-    height: 500,
+    height: 420, // corrected to fit real content right after first paint — see resize-window
     show: false,
     frame: false,
     resizable: false,

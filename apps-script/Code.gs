@@ -25,7 +25,7 @@
 // Shared secret the desktop widget must send. Keeps random visitors who
 // somehow get the web app URL from writing junk rows. Change this to your
 // own random string, and put the same value in the widget's config.json.
-var SHARED_SECRET = 'change-me-to-a-random-string';
+var SHARED_SECRET = 'FnKzihGF3xrFOthBuApKgGAQVd1s1aKQ';
 
 // Who gets the Friday reminder + the final compiled report.
 // Add more addresses any time — no redeploy needed for RECIPIENTS/REMINDER_RECIPIENTS,
@@ -50,7 +50,7 @@ var TIMESTAMP_COLUMN = 'Timestamp';
 
 // Names of tabs to exclude from the widget's tab list (besides any
 // starting with "_", which are always excluded).
-var HIDDEN_TABS = [];
+var HIDDEN_TABS = ['Weekly_Monthly_Summary'];
 
 // =============================== API ======================================
 

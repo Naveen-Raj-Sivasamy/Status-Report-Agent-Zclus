@@ -71,7 +71,7 @@
   .tab-btn:hover { background: var(--surface-hover); }
   .tab-btn:active { transform: scale(0.98); }
 
-  .report-actions { display: flex; gap: 8px; margin-bottom: 14px; }
+  .report-actions { display: flex; gap: 8px; margin-top: 14px; }
   .amber-btn {
     flex: 1; background: #ffb700; border: none; color: #2a2020;
     padding: 10px 8px; border-radius: 12px; font-size: 12px; font-weight: 700;
@@ -261,6 +261,14 @@
       const { tabs } = await window.statusApp.getTabs();
       els.main.innerHTML = '';
 
+      tabs.forEach((tab) => {
+        const btn = document.createElement('button');
+        btn.className = 'tab-btn';
+        btn.textContent = tab;
+        btn.onclick = () => showForm(tab);
+        els.main.appendChild(btn);
+      });
+
       const actions = document.createElement('div');
       actions.className = 'report-actions';
       const viewBtn = document.createElement('button');
@@ -274,14 +282,6 @@
       actions.appendChild(viewBtn);
       actions.appendChild(submitBtn);
       els.main.appendChild(actions);
-
-      tabs.forEach((tab) => {
-        const btn = document.createElement('button');
-        btn.className = 'tab-btn';
-        btn.textContent = tab;
-        btn.onclick = () => showForm(tab);
-        els.main.appendChild(btn);
-      });
     } catch (err) {
       showError(err.message || String(err), showTabPicker);
     }

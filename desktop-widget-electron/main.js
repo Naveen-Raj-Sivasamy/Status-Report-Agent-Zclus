@@ -1,6 +1,7 @@
 const { app, Tray, Menu, BrowserWindow, ipcMain, screen, nativeImage, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const APP_VERSION = require('./package.json').version;
 
 // Dev convenience: a full config.json next to main.js (gitignored) overrides
 // everything, including YOUR_NAME — this is what `npm start` uses locally.
@@ -61,14 +62,19 @@ let setupWin = null;
 
 // -------------------- backend calls (with retry) --------------------
 
-async function callWithRetry(fn, attempts = 6, delayMs = 1500) {
+async function callWithRetry(fn, attempts = 6) {
   let lastErr;
   for (let i = 1; i <= attempts; i++) {
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (i < attempts) await new Promise((r) => setTimeout(r, delayMs));
+      if (i < attempts) {
+        // Exponential backoff (500ms, 1s, 2s, 4s, ...): fast to recover from
+        // a single blip, patient enough for a slow cold start.
+        const delay = Math.min(500 * 2 ** (i - 1), 4000);
+        await new Promise((r) => setTimeout(r, delay));
+      }
     }
   }
   throw lastErr;
@@ -104,11 +110,77 @@ async function apiPost(tab, values) {
   return apiPostBody({ tab, values });
 }
 
-ipcMain.handle('get-tabs', async () => apiGet({ action: 'tabs' }));
-ipcMain.handle('get-columns', async (_e, tab) => apiGet({ action: 'columns', tab }));
-ipcMain.handle('submit-entry', async (_e, { tab, values }) => apiPost(tab, values));
+// In-memory cache the widget serves from instantly, refreshed in the
+// background — the popup opening should never wait on a network round trip
+// just to show the tab list it already showed a minute ago. The Apps
+// Script side still caches for 5 minutes too, so a background refresh here
+// is cheap even when it does need to hit the network.
+let tabsCache = null;
+let columnsCache = {}; // tab -> columns[]
+
+async function refreshTabsCache() {
+  try {
+    const data = await apiGet({ action: 'tabs' });
+    tabsCache = data;
+    return data;
+  } catch (err) {
+    if (tabsCache) return tabsCache; // stale is better than nothing
+    throw err;
+  }
+}
+
+async function refreshColumnsCache(tab) {
+  try {
+    const data = await apiGet({ action: 'columns', tab });
+    columnsCache[tab] = data;
+    return data;
+  } catch (err) {
+    if (columnsCache[tab]) return columnsCache[tab];
+    throw err;
+  }
+}
+
+function prefetchAll() {
+  refreshTabsCache()
+    .then((data) => Promise.all((data.tabs || []).map((t) => refreshColumnsCache(t))))
+    .catch(() => {
+      /* best-effort — a real request will retry when the user actually opens the form */
+    });
+}
+
+ipcMain.handle('get-tabs', async () => {
+  if (tabsCache) {
+    refreshTabsCache(); // stale-while-revalidate: return now, update quietly
+    return tabsCache;
+  }
+  return refreshTabsCache();
+});
+ipcMain.handle('get-columns', async (_e, tab) => {
+  if (columnsCache[tab]) {
+    refreshColumnsCache(tab);
+    return columnsCache[tab];
+  }
+  return refreshColumnsCache(tab);
+});
+ipcMain.handle('submit-entry', async (_e, { tab, values }) => {
+  const result = await apiPost(tab, values);
+  refreshColumnsCache(tab); // e.g. so the next "Cleanup Number" reflects this new row right away
+  return result;
+});
 ipcMain.handle('send-report-now', async () => apiPostBody({ action: 'sendReportNow' }));
+ipcMain.handle('get-next-number', async (_e, { tab, column }) => apiGet({ action: 'nextNumber', tab, column }));
 ipcMain.handle('get-your-name', () => config.YOUR_NAME || '');
+ipcMain.handle('get-app-version', () => APP_VERSION);
+ipcMain.handle('check-latest-version', async () => {
+  try {
+    return await apiGet({ action: 'version' });
+  } catch {
+    return null; // never block the app on a version check
+  }
+});
+ipcMain.handle('open-external', (_e, url) => {
+  if (url) shell.openExternal(url);
+});
 ipcMain.handle('hide-window', () => hidePopup());
 ipcMain.handle('open-sheet', () => {
   if (config.SHEET_URL) shell.openExternal(config.SHEET_URL);
@@ -311,6 +383,8 @@ function startMainApp() {
 
 app.whenReady().then(() => {
   if (!config) return;
+
+  prefetchAll(); // warm the tabs/columns cache immediately, don't make the first click wait
 
   if (!config.YOUR_NAME) {
     // First run on this machine: ask for a name once, then continue.

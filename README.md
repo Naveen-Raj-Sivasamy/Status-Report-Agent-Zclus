@@ -182,6 +182,26 @@ If you ever change `WEBHOOK_URL`, `TOKEN`, or `SHEET_URL`, update
 (this is the one thing that isn't picked up automatically, since it's
 baked in at build time).
 
+### Letting teammates know a new version exists
+
+The app shows its version number (e.g. `v1.1.0`) next to the title, and
+checks once per launch whether a newer one exists. When you cut a new
+`.exe` for a code/UI change (not just a data change — those apply on their
+own within a few minutes, see the note at the top of `Code.gs`):
+
+1. Bump `"version"` in `desktop-widget-electron/package.json`.
+2. Rebuild (`npm run build:win`) and put the new `.exe` somewhere
+   teammates can grab it from (shared drive, Slack, wherever).
+3. Open the Google Sheet, unhide and open the `_Config` tab (created
+   automatically the first time anyone used the app — right-click any tab
+   → "Unhide sheet" if you don't see it), and set:
+   - `LatestVersion` → the version you just built (e.g. `1.1.0`)
+   - `DownloadUrl` → a link to the new `.exe`
+
+That's it — no redeploy needed, since this reads live sheet data. Within
+a few minutes, everyone still on the old version sees a banner in the app
+telling them to update, with a button that opens `DownloadUrl` directly.
+
 ## 5. Adjust the schedule
 
 Defaults: reminder at 6pm Friday, report at 11pm Friday, both in the

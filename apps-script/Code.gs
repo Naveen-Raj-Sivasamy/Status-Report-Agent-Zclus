@@ -76,6 +76,18 @@ function doGet(e) {
       var columns = cached('columns:' + tab, function () { return getColumns(tab); });
       return jsonOut({ ok: true, tab: tab, columns: columns });
     }
+    if (action === 'nextNumber') {
+      var seqTab = e.parameter.tab;
+      var seqColumn = e.parameter.column;
+      return jsonOut({ ok: true, next: getNextSequenceNumber(seqTab, seqColumn) });
+    }
+    if (action === 'version') {
+      return jsonOut({
+        ok: true,
+        latest: getConfigValue('LatestVersion'),
+        downloadUrl: getConfigValue('DownloadUrl'),
+      });
+    }
     return jsonOut({ ok: true, message: 'Status Report Tracker Agent API is running.' });
   } catch (err) {
     return jsonOut({ ok: false, error: String(err) });
@@ -283,12 +295,72 @@ function getHeaderRow(sheet) {
   });
 }
 
+/** Next value for a numbered column (e.g. "Cleanup Number"): the highest
+ * existing number in that column, plus one. Not cached — it has to reflect
+ * every submission so far, including ones from a few seconds ago. */
+function getNextSequenceNumber(tabName, columnName) {
+  var sheet = getSheetByName(tabName);
+  if (!sheet) return 1;
+  var headers = getHeaderRow(sheet);
+  var target = String(columnName).trim().toLowerCase();
+  var colIndex = -1;
+  for (var i = 0; i < headers.length; i++) {
+    if (String(headers[i]).trim().toLowerCase() === target) { colIndex = i; break; }
+  }
+  if (colIndex === -1) return 1;
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return 1;
+
+  var values = sheet.getRange(2, colIndex + 1, lastRow - 1, 1).getValues();
+  var max = 0;
+  values.forEach(function (row) {
+    var n = Number(row[0]);
+    if (!isNaN(n) && n > max) max = n;
+  });
+  return max + 1;
+}
+
 function getColumns(tabName) {
   var sheet = getSheetByName(tabName);
   if (!sheet) return [];
   return getHeaderRow(sheet).filter(function (col) {
     return col !== TIMESTAMP_COLUMN; // widget doesn't ask the user for this
   });
+}
+
+// Name of the hidden config tab holding app-version/download-link info the
+// widget checks on launch. Created automatically (with sensible defaults)
+// the first time it's needed — no manual setup required. Starts with "_"
+// so it's already excluded from the widget's tab list.
+var CONFIG_TAB_NAME = '_Config';
+
+function ensureConfigTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(CONFIG_TAB_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG_TAB_NAME);
+    sheet.getRange(1, 1, 3, 2).setValues([
+      ['Key', 'Value'],
+      ['LatestVersion', '1.1.0'],
+      ['DownloadUrl', ''],
+    ]);
+    sheet.hideSheet();
+  }
+  return sheet;
+}
+
+/** Bump LatestVersion (and DownloadUrl) in the _Config tab whenever you cut
+ * a new installer — every running widget picks it up on next launch and
+ * nudges whoever's on an older version to grab the update. No redeploy
+ * needed, since this reads live sheet data, not script code. */
+function getConfigValue(key) {
+  var sheet = ensureConfigTab();
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]).trim() === key) return data[i][1];
+  }
+  return '';
 }
 
 function jsonOut(obj) {

@@ -23,6 +23,7 @@ const FIELD_CONFIG = {
     'Assigned to': { type: 'multiselect', options: ASSIGNEES },
   },
   Cleanup_Activities: {
+    'Cleanup Number': { type: 'sequence' },
     Volume: { type: 'select', options: ['Large', 'Medium', 'Small'] },
     Requester: { type: 'select', options: REQUESTERS },
     'Site Impacted': { type: 'select', options: SITES },

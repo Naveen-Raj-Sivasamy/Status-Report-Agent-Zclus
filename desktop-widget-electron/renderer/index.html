@@ -71,7 +71,24 @@
   .tab-btn:hover { background: var(--surface-hover); }
   .tab-btn:active { transform: scale(0.98); }
 
-  .report-actions { display: flex; gap: 8px; margin-top: 14px; }
+  /* Persistent bar pinned below the (scrollable) tab list — outside `main`,
+     so it never shifts up/down as tabs are added or removed. */
+  .report-actions { display: flex; gap: 8px; padding: 8px 16px 12px; border-top: 1px solid rgba(255,255,255,0.14); }
+  .version-badge {
+    font-size: 9px; font-weight: 700; color: var(--on-brand-dim);
+    background: rgba(255,255,255,0.16); padding: 2px 6px; border-radius: 8px;
+    vertical-align: middle; margin-left: 4px;
+  }
+  .update-banner {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: #ffb700; color: #2a2020; font-size: 11px; font-weight: 700;
+    padding: 8px 16px; -webkit-app-region: no-drag;
+  }
+  .update-banner button {
+    background: #2a2020; color: #ffffff; border: none; border-radius: 6px;
+    padding: 5px 10px; font-weight: 700; font-size: 11px; cursor: pointer; flex-shrink: 0;
+  }
+  .update-banner button:hover { background: #3a2a2a; }
   .amber-btn {
     flex: 1; background: #ffb700; border: none; color: #2a2020;
     padding: 10px 8px; border-radius: 12px; font-size: 12px; font-weight: 700;
@@ -178,7 +195,7 @@
   <div id="card">
     <header>
       <div>
-        <h1>Status Report Generator</h1>
+        <h1>Status Report Generator <span class="version-badge" id="version-badge"></span></h1>
         <div class="sub" id="header-sub">What are you logging status for?</div>
       </div>
       <div class="header-actions">
@@ -187,7 +204,17 @@
       </div>
     </header>
 
+    <div class="update-banner hidden" id="update-banner">
+      <span id="update-banner-text"></span>
+      <button id="update-banner-btn">Get it</button>
+    </div>
+
     <main id="main"></main>
+
+    <div class="report-actions hidden" id="report-actions">
+      <button class="amber-btn" id="view-report-btn">View Report</button>
+      <button class="amber-btn" id="submit-report-btn">Submit Report</button>
+    </div>
 
     <footer class="form-actions hidden" id="footer">
       <button class="secondary" id="cancel-btn">Cancel</button>
@@ -207,12 +234,20 @@
     cancelBtn: document.getElementById('cancel-btn'),
     closeBtn: document.getElementById('close-btn'),
     sheetBtn: document.getElementById('sheet-btn'),
+    reportActions: document.getElementById('report-actions'),
+    viewReportBtn: document.getElementById('view-report-btn'),
+    submitReportBtn: document.getElementById('submit-report-btn'),
+    versionBadge: document.getElementById('version-badge'),
+    updateBanner: document.getElementById('update-banner'),
+    updateBannerText: document.getElementById('update-banner-text'),
+    updateBannerBtn: document.getElementById('update-banner-btn'),
   };
 
   let yourName = '';
 
   function showLoading(msg) {
     els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
     els.main.innerHTML = `
       <div id="status-view">
         <div class="spinner"></div>
@@ -222,6 +257,7 @@
 
   function showError(msg, retryFn) {
     els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
     els.main.innerHTML = `
       <div id="status-view">
         <div class="icon">⚠️</div>
@@ -258,6 +294,7 @@
   // and the weekly report send, so there's never any doubt about the outcome.
   function showResult({ success, title, subtitle, doneLabel, onDone }) {
     els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
     els.sub.textContent = '';
     els.main.innerHTML = `
       <div id="status-view" class="result-view">
@@ -278,6 +315,7 @@
 
   function showReportConfirm() {
     els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
     els.main.innerHTML = `
       <div id="status-view">
         <div class="icon">📋</div>
@@ -328,19 +366,10 @@
         els.main.appendChild(btn);
       });
 
-      const actions = document.createElement('div');
-      actions.className = 'report-actions';
-      const viewBtn = document.createElement('button');
-      viewBtn.className = 'amber-btn';
-      viewBtn.textContent = 'View Report';
-      viewBtn.onclick = () => window.statusApp.openSheet();
-      const submitBtn = document.createElement('button');
-      submitBtn.className = 'amber-btn';
-      submitBtn.textContent = 'Submit Report';
-      submitBtn.onclick = showReportConfirm;
-      actions.appendChild(viewBtn);
-      actions.appendChild(submitBtn);
-      els.main.appendChild(actions);
+      // The View Report / Submit Report buttons live outside `main` (see
+      // markup) so they stay pinned at the very bottom of the card no
+      // matter how many tabs get added later — they never move.
+      els.reportActions.classList.remove('hidden');
     } catch (err) {
       showError(err.message || String(err), showTabPicker);
     }
@@ -398,6 +427,14 @@
       return input;
     }
 
+    if (spec && spec.type === 'sequence') {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.readOnly = true;
+      input.placeholder = 'Loading…';
+      return input;
+    }
+
     const isLong = /notes|description|blocker|comment|detail/i.test(col);
     const input = document.createElement(isLong ? 'textarea' : 'input');
     if (isLong) input.rows = 2;
@@ -445,6 +482,21 @@
         sync();
       });
 
+      // Auto-numbered columns (e.g. "Cleanup Number"): fetch the next value
+      // — highest existing number in that column, plus one — as soon as the
+      // form opens, based on what's actually on the sheet right now.
+      Object.keys(spec).forEach((col) => {
+        if (spec[col].type !== 'sequence') return;
+        const seqInput = findInput(col);
+        if (!seqInput) return;
+        window.statusApp.getNextNumber(tab, col).then((res) => {
+          seqInput.value = res && res.next != null ? res.next : '';
+        }).catch(() => {
+          seqInput.readOnly = false;
+          seqInput.placeholder = 'Enter manually';
+        });
+      });
+
       els.footer.classList.remove('hidden');
       els.cancelBtn.onclick = showTabPicker;
       els.submitBtn.onclick = async () => {
@@ -468,6 +520,32 @@
 
   els.closeBtn.onclick = () => window.statusApp.hideWindow();
   els.sheetBtn.onclick = () => window.statusApp.openSheet();
+  els.viewReportBtn.onclick = () => window.statusApp.openSheet();
+  els.submitReportBtn.onclick = () => showReportConfirm();
+
+  // Version badge + "there's a newer build" nudge — checked once per app
+  // launch (not on every popup open, to keep re-opening the form instant).
+  async function checkAppVersion() {
+    try {
+      const version = await window.statusApp.getAppVersion();
+      els.versionBadge.textContent = `v${version}`;
+
+      const latest = await window.statusApp.checkLatestVersion();
+      if (latest && latest.ok && latest.latest && latest.latest !== version) {
+        els.updateBannerText.textContent =
+          `A newer version (v${latest.latest}) is available — update to get the latest changes.`;
+        els.updateBanner.classList.remove('hidden');
+        if (latest.downloadUrl) {
+          els.updateBannerBtn.classList.remove('hidden');
+          els.updateBannerBtn.onclick = () => window.statusApp.openExternal(latest.downloadUrl);
+        } else {
+          els.updateBannerBtn.classList.add('hidden');
+        }
+      }
+    } catch {
+      /* best-effort — never block the app over a version check */
+    }
+  }
 
   window.statusApp.onOpened(async () => {
     yourName = await window.statusApp.getYourName();
@@ -475,6 +553,7 @@
   });
 
   window.statusApp.getYourName().then((n) => (yourName = n));
+  checkAppVersion();
   showTabPicker();
 </script>
 </body>

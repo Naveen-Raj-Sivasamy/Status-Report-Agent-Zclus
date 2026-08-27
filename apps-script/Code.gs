@@ -136,6 +136,13 @@ function doPost(e) {
   }
 }
 
+/** Client sends start/end as ISO date strings (or omits them entirely for
+ * "This Week", which each caller defaults on its own). */
+function parseRangeFromRequest(body) {
+  if (!body.start || !body.end) return null;
+  return { start: new Date(body.start), end: new Date(body.end) };
+}
+
 /**
  * Run this ONCE from the editor (select it in the function dropdown, click
  * Run) to grant the Drive + Gmail-sending permissions compileAndSendReport
@@ -217,15 +224,15 @@ function sendFridayReminder() {
 }
 
 /**
- * Friday ~11pm: build a fresh workbook containing only THIS WEEK's rows
- * (Monday 00:00 through now, per REPORT_DATE_COLUMN) for each visible tab,
- * export it as .xlsx, email it, then discard the temp file.
+ * Builds a fresh workbook containing only the rows whose REPORT_DATE_COLUMN
+ * falls within `range` (for each visible tab), exports it as .xlsx, and
+ * discards the temp Drive file. Shared by both the email path
+ * (compileAndSendReport) and the download path (getReportFileBase64) so
+ * there's exactly one place that knows how to filter/build a report.
  */
-function compileAndSendReport() {
+function buildReportBlob(range) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var range = getCurrentWeekRange();
-  var tempName = ss.getName() + ' — Week of ' +
-    Utilities.formatDate(range.start, Session.getScriptTimeZone(), 'MMM d, yyyy');
+  var tempName = ss.getName() + ' — ' + formatRangeLabel(range);
 
   var temp = SpreadsheetApp.create(tempName);
   var tabNames = listVisibleTabsUncached();
@@ -256,21 +263,41 @@ function compileAndSendReport() {
   });
 
   SpreadsheetApp.flush();
-  var blob = exportSpreadsheetAsXlsx(temp.getId(), tempName + '.xlsx');
+  var fileName = tempName + '.xlsx';
+  var blob = exportSpreadsheetAsXlsx(temp.getId(), fileName);
+  DriveApp.getFileById(temp.getId()).setTrashed(true); // clean up the temp file
+  return { blob: blob, fileName: fileName };
+}
 
-  var subject = 'Weekly Status Report — ' +
-    Utilities.formatDate(range.start, Session.getScriptTimeZone(), 'MMM d') + ' to ' +
-    Utilities.formatDate(range.end, Session.getScriptTimeZone(), 'MMM d, yyyy');
-  var body = 'Attached is this week\'s status report (' +
-    Utilities.formatDate(range.start, Session.getScriptTimeZone(), 'MMM d') + '–' +
-    Utilities.formatDate(range.end, Session.getScriptTimeZone(), 'MMM d') + ').\n\n' +
-    'Full sheet (all history): ' + ss.getUrl();
+function formatRangeLabel(range) {
+  var tz = Session.getScriptTimeZone();
+  return Utilities.formatDate(range.start, tz, 'MMM d, yyyy') + ' to ' +
+    Utilities.formatDate(range.end, tz, 'MMM d, yyyy');
+}
+
+/**
+ * Emails the report for `range` (defaults to the current Mon-Fri work week —
+ * this is what the Friday 11pm trigger calls with no argument) to
+ * REPORT_RECIPIENTS.
+ */
+function compileAndSendReport(range) {
+  range = range || getCurrentWeekRange();
+  var built = buildReportBlob(range);
+
+  var subject = 'Status Report — ' + formatRangeLabel(range);
+  var body = 'Attached is the status report for ' + formatRangeLabel(range) + '.\n\n' +
+    'Full sheet (all history): ' + SpreadsheetApp.getActiveSpreadsheet().getUrl();
 
   REPORT_RECIPIENTS.forEach(function (addr) {
-    MailApp.sendEmail({ to: addr, subject: subject, body: body, attachments: [blob] });
+    MailApp.sendEmail({ to: addr, subject: subject, body: body, attachments: [built.blob] });
   });
+}
 
-  DriveApp.getFileById(temp.getId()).setTrashed(true); // clean up the temp file
+/** Same report as compileAndSendReport, but handed back as base64 instead
+ * of emailed — for the app's "Download" option. */
+function getReportFileBase64(range) {
+  var built = buildReportBlob(range);
+  return { fileName: built.fileName, base64: Utilities.base64Encode(built.blob.getBytes()) };
 }
 
 /**

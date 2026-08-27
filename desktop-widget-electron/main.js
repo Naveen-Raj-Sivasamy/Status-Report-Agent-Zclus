@@ -167,7 +167,20 @@ ipcMain.handle('submit-entry', async (_e, { tab, values }) => {
   refreshColumnsCache(tab); // e.g. so the next "Cleanup Number" reflects this new row right away
   return result;
 });
-ipcMain.handle('send-report-now', async () => apiPostBody({ action: 'sendReportNow' }));
+ipcMain.handle('send-report-now', async (_e, range) =>
+  apiPostBody(Object.assign({ action: 'sendReportNow' }, range || {}))
+);
+ipcMain.handle('download-report', async (_e, range) => {
+  const data = await apiPostBody(Object.assign({ action: 'downloadReport' }, range || {}));
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Save Report',
+    defaultPath: data.fileName,
+    filters: [{ name: 'Excel Workbook', extensions: ['xlsx'] }],
+  });
+  if (canceled || !filePath) return { canceled: true };
+  fs.writeFileSync(filePath, Buffer.from(data.base64, 'base64'));
+  return { canceled: false, filePath };
+});
 ipcMain.handle('get-next-number', async (_e, { tab, column }) => apiGet({ action: 'nextNumber', tab, column }));
 ipcMain.handle('get-your-name', () => config.YOUR_NAME || '');
 ipcMain.handle('get-app-version', () => APP_VERSION);

@@ -57,11 +57,11 @@ async function apiGet(params) {
   });
 }
 
-async function apiPost(tab, values) {
+async function apiPostBody(body) {
   return callWithRetry(async () => {
     const resp = await fetch(config.WEBHOOK_URL, {
       method: 'POST',
-      body: JSON.stringify({ token: config.TOKEN, tab, values }),
+      body: JSON.stringify(Object.assign({ token: config.TOKEN }, body)),
       signal: AbortSignal.timeout(45000),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -71,9 +71,14 @@ async function apiPost(tab, values) {
   });
 }
 
+async function apiPost(tab, values) {
+  return apiPostBody({ tab, values });
+}
+
 ipcMain.handle('get-tabs', async () => apiGet({ action: 'tabs' }));
 ipcMain.handle('get-columns', async (_e, tab) => apiGet({ action: 'columns', tab }));
 ipcMain.handle('submit-entry', async (_e, { tab, values }) => apiPost(tab, values));
+ipcMain.handle('send-report-now', async () => apiPostBody({ action: 'sendReportNow' }));
 ipcMain.handle('get-your-name', () => config.YOUR_NAME || '');
 ipcMain.handle('hide-window', () => hidePopup());
 ipcMain.handle('open-sheet', () => {

@@ -43,7 +43,7 @@
     font-size: 15px; font-weight: 700; color: var(--on-brand); margin: 0;
     letter-spacing: 0.2px;
   }
-  header .sub { font-size: 11px; color: var(--on-brand-dim); margin-top: 3px; }
+  header .sub { font-size: 11px; color: var(--on-brand-dim); margin-top: 3px; font-weight: 600; }
   .header-actions { display: flex; gap: 6px; }
   .icon-btn {
     background: rgba(255,255,255,0.14); border: none; color: var(--on-brand);
@@ -71,11 +71,21 @@
   .tab-btn:hover { background: var(--surface-hover); }
   .tab-btn:active { transform: scale(0.98); }
 
+  .report-actions { display: flex; gap: 8px; margin-bottom: 14px; }
+  .amber-btn {
+    flex: 1; background: #ffb700; border: none; color: #2a2020;
+    padding: 10px 8px; border-radius: 12px; font-size: 12px; font-weight: 700;
+    cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: background 0.12s ease, transform 0.06s ease;
+  }
+  .amber-btn:hover { background: #ffc633; }
+  .amber-btn:active { transform: scale(0.98); }
+
   .field { margin-bottom: 11px; }
   .field label {
     display: block; font-size: 10.5px; color: var(--on-brand-dim);
     margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;
-    font-weight: 600;
+    font-weight: 700;
   }
   .field textarea, .field input, .field select {
     width: 100%; background: var(--surface); border: none;
@@ -123,7 +133,7 @@
   }
   #status-view .icon { font-size: 30px; }
   #status-view .msg { font-size: 13px; color: var(--on-brand); font-weight: 600; }
-  #status-view .err { font-size: 11px; color: var(--on-brand-dim); word-break: break-word; }
+  #status-view .err { font-size: 11px; color: var(--on-brand-dim); font-weight: 600; word-break: break-word; }
   .spinner {
     width: 20px; height: 20px; border-radius: 50%;
     border: 3px solid rgba(255,255,255,0.3); border-top-color: var(--on-brand);
@@ -133,7 +143,7 @@
 
   .credit {
     text-align: center; font-size: 9.5px; color: var(--on-brand-dim);
-    padding: 6px 0 10px; opacity: 0.85;
+    padding: 6px 0 10px; opacity: 0.9; font-weight: 700;
   }
 
   .hidden { display: none !important; }
@@ -214,6 +224,35 @@
     return d.innerHTML;
   }
 
+  function showReportConfirm() {
+    els.footer.classList.add('hidden');
+    els.main.innerHTML = `
+      <div id="status-view">
+        <div class="icon">📋</div>
+        <div class="msg">Have you verified the report before submitting?</div>
+        <div class="err">If not, please verify it and come back.</div>
+        <div style="display:flex; gap:8px; margin-top:6px;">
+          <button class="secondary" id="not-yet-btn">Not yet</button>
+          <button class="primary" id="confirm-send-btn">Yes, send it</button>
+        </div>
+      </div>`;
+    document.getElementById('not-yet-btn').onclick = showTabPicker;
+    document.getElementById('confirm-send-btn').onclick = async () => {
+      showLoading('Sending report…');
+      try {
+        await window.statusApp.sendReportNow();
+        els.main.innerHTML = `
+          <div id="status-view">
+            <div class="icon">✅</div>
+            <div class="msg">Report sent</div>
+          </div>`;
+        setTimeout(showTabPicker, 1300);
+      } catch (err) {
+        showError(err.message || String(err), showReportConfirm);
+      }
+    };
+  }
+
   async function showTabPicker() {
     els.sub.textContent = 'What are you logging status for?';
     els.footer.classList.add('hidden');
@@ -221,6 +260,21 @@
     try {
       const { tabs } = await window.statusApp.getTabs();
       els.main.innerHTML = '';
+
+      const actions = document.createElement('div');
+      actions.className = 'report-actions';
+      const viewBtn = document.createElement('button');
+      viewBtn.className = 'amber-btn';
+      viewBtn.textContent = 'View Report';
+      viewBtn.onclick = () => window.statusApp.openSheet();
+      const submitBtn = document.createElement('button');
+      submitBtn.className = 'amber-btn';
+      submitBtn.textContent = 'Submit Report';
+      submitBtn.onclick = showReportConfirm;
+      actions.appendChild(viewBtn);
+      actions.appendChild(submitBtn);
+      els.main.appendChild(actions);
+
       tabs.forEach((tab) => {
         const btn = document.createElement('button');
         btn.className = 'tab-btn';

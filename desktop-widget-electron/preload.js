@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('statusApp', {
   getTabs: () => ipcRenderer.invoke('get-tabs'),
   getColumns: (tab) => ipcRenderer.invoke('get-columns', tab),
   submitEntry: (tab, values) => ipcRenderer.invoke('submit-entry', { tab, values }),
+  sendReportNow: () => ipcRenderer.invoke('send-report-now'),
   getYourName: () => ipcRenderer.invoke('get-your-name'),
   hideWindow: () => ipcRenderer.invoke('hide-window'),
   openSheet: () => ipcRenderer.invoke('open-sheet'),

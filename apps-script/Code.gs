@@ -89,6 +89,12 @@ function doPost(e) {
     if (SHARED_SECRET && body.token !== SHARED_SECRET) {
       return jsonOut({ ok: false, error: 'Invalid token.' });
     }
+
+    if (body.action === 'sendReportNow') {
+      compileAndSendReport();
+      return jsonOut({ ok: true, message: 'Report sent.' });
+    }
+
     if (!body.tab) {
       return jsonOut({ ok: false, error: 'Missing "tab".' });
     }

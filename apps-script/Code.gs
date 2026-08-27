@@ -130,6 +130,23 @@ function doPost(e) {
   }
 }
 
+/**
+ * Run this ONCE from the editor (select it in the function dropdown, click
+ * Run) to grant the Drive + Gmail-sending permissions compileAndSendReport
+ * needs. clearCache()/setupTriggers() don't touch those APIs, so running
+ * them doesn't trigger the consent screen — this does, safely:
+ * it creates a throwaway Drive file and deletes it immediately, and checks
+ * your mail quota (a real MailApp call that sends nothing). No report is
+ * emailed and nothing is left behind. You'll see a Google permission
+ * screen the first time — approve it, then this feature is unblocked.
+ */
+function authorizeApis() {
+  var temp = DriveApp.createFile('status-report-agent-auth-test.txt', 'temporary — safe to ignore/delete');
+  DriveApp.getFileById(temp.getId()).setTrashed(true);
+  var quota = MailApp.getRemainingDailyQuota();
+  Logger.log('Authorized. Remaining mail quota today: ' + quota);
+}
+
 /** Run manually any time you add/rename a tab or column and don't want
  * to wait out CACHE_SECONDS for the widget to notice. */
 function clearCache() {

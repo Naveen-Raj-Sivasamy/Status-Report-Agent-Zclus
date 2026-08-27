@@ -249,9 +249,7 @@ function compileAndSendReport() {
   });
 
   SpreadsheetApp.flush();
-  var blob = DriveApp.getFileById(temp.getId())
-    .getAs(MimeType.MICROSOFT_EXCEL)
-    .setName(tempName + '.xlsx');
+  var blob = exportSpreadsheetAsXlsx(temp.getId(), tempName + '.xlsx');
 
   var subject = 'Weekly Status Report — ' +
     Utilities.formatDate(range.start, Session.getScriptTimeZone(), 'MMM d') + ' to ' +
@@ -266,6 +264,27 @@ function compileAndSendReport() {
   });
 
   DriveApp.getFileById(temp.getId()).setTrashed(true); // clean up the temp file
+}
+
+/**
+ * Converts a Google Sheet to a real .xlsx blob. DriveApp's own
+ * File.getAs(MimeType.MICROSOFT_EXCEL) can NOT do this — Google Workspace
+ * files (Sheets/Docs/Slides) aren't convertible that way, and it fails with
+ * "Converting from application/vnd.google-apps.spreadsheet ... is not
+ * supported." The documented way is Sheets' own export endpoint, using the
+ * script's own OAuth token (no extra scope needed beyond what's already
+ * declared in appsscript.json).
+ */
+function exportSpreadsheetAsXlsx(spreadsheetId, fileName) {
+  var url = 'https://docs.google.com/spreadsheets/d/' + spreadsheetId + '/export?format=xlsx';
+  var response = UrlFetchApp.fetch(url, {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true,
+  });
+  if (response.getResponseCode() !== 200) {
+    throw new Error('Failed to export report as .xlsx (HTTP ' + response.getResponseCode() + ')');
+  }
+  return response.getBlob().setName(fileName);
 }
 
 /** Monday 00:00:00 of the current week through right now. */

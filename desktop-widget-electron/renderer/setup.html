@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Welcome</title>
+<style>
+  html, body {
+    margin: 0; height: 100%;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #6e1b2c;
+    color: #ffffff;
+  }
+  body {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 0 26px; box-sizing: border-box; text-align: center;
+  }
+  h2 { margin: 0 0 6px; font-size: 17px; font-weight: 700; }
+  p { margin: 0 0 18px; font-size: 12px; color: #f3d9de; font-weight: 600; line-height: 1.4; }
+  input {
+    width: 100%; padding: 11px 12px; border-radius: 10px; border: none;
+    font-size: 14px; margin-bottom: 14px; box-sizing: border-box;
+    background: #ffffff; color: #2a2020;
+  }
+  input:focus { outline: 2px solid #ffb700; }
+  button {
+    background: #ffb700; color: #2a2020; border: none; width: 100%;
+    padding: 11px 12px; border-radius: 10px; font-weight: 700; font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { background: #ffc633; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .err { color: #ffd4d4; font-size: 11px; font-weight: 700; margin-top: 10px; min-height: 14px; }
+</style>
+</head>
+<body>
+  <h2>Welcome to Status Report Generator</h2>
+  <p>What's your name? This is how your entries and reports will be labeled.</p>
+  <input id="name" type="text" placeholder="e.g. Priya Sharma" />
+  <button id="save">Get started</button>
+  <div class="err" id="err"></div>
+  <script>
+    const input = document.getElementById('name');
+    const btn = document.getElementById('save');
+    const err = document.getElementById('err');
+    input.focus();
+
+    function submit() {
+      const v = input.value.trim();
+      if (!v) {
+        err.textContent = 'Please enter your name.';
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+      window.statusApp.saveYourName(v);
+    }
+
+    btn.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+  </script>
+</body>
+</html>

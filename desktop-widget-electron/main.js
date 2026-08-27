@@ -1,25 +1,53 @@
-const { app, Tray, Menu, BrowserWindow, ipcMain, screen, nativeImage, shell } = require('electron');
+const { app, Tray, Menu, BrowserWindow, ipcMain, screen, nativeImage, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// Dev convenience: a full config.json next to main.js (gitignored) overrides
+// everything, including YOUR_NAME — this is what `npm start` uses locally.
 const CONFIG_PATH = path.join(__dirname, 'config.json');
+// Shared connection details (WEBHOOK_URL/TOKEN/SHEET_URL) baked into the
+// installer at build time — same for every teammate.
+const TEMPLATE_PATH = path.join(__dirname, 'config.template.json');
+// Per-person name, written on first run into each teammate's own profile
+// folder — never baked into the installer, never shared between installs.
+const USER_CONFIG_PATH = path.join(app.getPath('userData'), 'user-config.json');
 const POSITION_PATH = path.join(app.getPath('userData'), 'float-position.json');
 
-function loadConfig() {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    throw new Error(
-      `Missing config.json next to main.js.\nCopy config.example.json to config.json and fill in WEBHOOK_URL / TOKEN.\nExpected at: ${CONFIG_PATH}`
-    );
+function loadSharedConfig() {
+  if (fs.existsSync(CONFIG_PATH)) {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   }
-  return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  if (fs.existsSync(TEMPLATE_PATH)) {
+    return JSON.parse(fs.readFileSync(TEMPLATE_PATH, 'utf8'));
+  }
+  throw new Error(
+    `Missing config.json or config.template.json next to main.js.\nExpected at: ${CONFIG_PATH}`
+  );
+}
+
+function loadSavedName() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, 'utf8'));
+    return saved.YOUR_NAME || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveYourNameToDisk(name) {
+  try {
+    fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify({ YOUR_NAME: name }));
+  } catch {
+    /* best-effort */
+  }
 }
 
 let config;
 try {
-  config = loadConfig();
+  config = loadSharedConfig();
+  if (!config.YOUR_NAME) config.YOUR_NAME = loadSavedName();
 } catch (err) {
   app.whenReady().then(() => {
-    const { dialog } = require('electron');
     dialog.showErrorBox('Status Update — setup needed', err.message);
     app.quit();
   });
@@ -29,6 +57,7 @@ try {
 let tray = null;
 let popup = null;
 let floatBtn = null;
+let setupWin = null;
 
 // -------------------- backend calls (with retry) --------------------
 
@@ -93,6 +122,41 @@ ipcMain.handle('show-fab-menu', () => {
     { label: 'Quit', click: () => app.quit() },
   ]).popup({ window: floatBtn });
 });
+ipcMain.handle('save-your-name', (_e, name) => {
+  config.YOUR_NAME = name;
+  saveYourNameToDisk(name);
+  if (setupWin) {
+    setupWin.close();
+    setupWin = null;
+  }
+  startMainApp();
+});
+
+// -------------------- first-run "what's your name" prompt --------------------
+
+function createSetupWindow() {
+  const win = new BrowserWindow({
+    width: 360,
+    height: 260,
+    resizable: false,
+    fullscreenable: false,
+    minimizable: false,
+    maximizable: false,
+    title: 'Welcome — Status Report Generator',
+    backgroundColor: '#6e1b2c',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.setMenuBarVisibility(false);
+  win.loadFile(path.join(__dirname, 'renderer', 'setup.html'));
+  win.on('closed', () => {
+    if (setupWin === win) setupWin = null;
+  });
+  return win;
+}
 
 // -------------------- popup (the form) --------------------
 
@@ -225,9 +289,7 @@ function createFloatButton() {
   return win;
 }
 
-app.whenReady().then(() => {
-  if (!config) return;
-
+function startMainApp() {
   if (app.dock) app.dock.hide(); // tray/floating-button app, no dock icon needed
 
   const trayImg = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray.png'));
@@ -245,6 +307,18 @@ app.whenReady().then(() => {
 
   popup = createPopup();
   floatBtn = createFloatButton();
+}
+
+app.whenReady().then(() => {
+  if (!config) return;
+
+  if (!config.YOUR_NAME) {
+    // First run on this machine: ask for a name once, then continue.
+    setupWin = createSetupWindow();
+    return;
+  }
+
+  startMainApp();
 });
 
 app.on('window-all-closed', () => {

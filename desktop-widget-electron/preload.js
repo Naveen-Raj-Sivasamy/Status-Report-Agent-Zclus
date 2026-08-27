@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld('statusApp', {
   openSheet: () => ipcRenderer.invoke('open-sheet'),
   fabClicked: () => ipcRenderer.invoke('fab-clicked'),
   showFabMenu: () => ipcRenderer.invoke('show-fab-menu'),
+  saveYourName: (name) => ipcRenderer.invoke('save-your-name', name),
   onOpened: (callback) => ipcRenderer.on('opened', callback),
 });

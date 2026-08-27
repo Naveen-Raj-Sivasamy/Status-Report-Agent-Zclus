@@ -84,8 +84,8 @@ cp config.example.json config.json
 Edit `config.json`:
 - `WEBHOOK_URL` — the `.../exec` URL from step 2.5.
 - `TOKEN` — must match `SHARED_SECRET` in `Code.gs`.
-- `YOUR_NAME` — optional, prefills any field whose column header contains
-  "name".
+- `YOUR_NAME` — your name, used to label entries and reports.
+- `SHEET_URL` — the sheet's normal (non-API) URL, used by the "Open sheet"/"View Report" buttons.
 
 Run it (needs [Node.js](https://nodejs.org) 18+):
 
@@ -94,9 +94,15 @@ npm install
 npm start
 ```
 
-A small icon appears in the system tray (Windows) / menu bar (macOS).
-Click it → a dark, rounded popup opens near the icon → pick a tab → fill
-in the form → Submit. Click the icon again (or click away) to dismiss it.
+A small floating icon appears on screen (and in the system tray). Click it
+→ a maroon popup opens near the icon → pick a tab → fill in the form →
+Submit. The popup stays open and on top of everything until you close it
+with the ✕ — switching to another app to look something up won't lose
+your form.
+
+`config.json` here is for **your own dev/testing runs only** — it's
+gitignored and never shipped. The installer built in the next section
+does not use it at all.
 
 ### Python/Tkinter version (fallback)
 
@@ -112,28 +118,69 @@ pip install -r requirements.txt
 python status_widget.py
 ```
 
-## 4. Package it for teammates
+## 4. Package it for teammates — one file, zero setup
 
-Neither PyInstaller nor electron-builder cross-compiles, so build on each OS:
+Teammates get a **single `.exe`** — no Node.js, no `config.json` to edit,
+no manual install steps. Double-clicking it installs the app silently and
+launches it; the first time it runs, it just asks for the person's name,
+then remembers it.
 
-- **Electron, Windows**: `cd desktop-widget-electron && npm install && npm run build:win` → `dist\StatusUpdate Setup *.exe`.
-- **Electron, Mac**: `cd desktop-widget-electron && npm install && npm run build:mac` → `dist/StatusUpdate-*.dmg`.
-- **Python, Windows**: run `build_windows.bat` on a Windows machine →
-  `dist\StatusUpdate.exe`.
-- **Python, Mac**: run `build_mac.sh` on a Mac → `dist/StatusUpdate.app`.
+This works because the app now reads connection details
+(`WEBHOOK_URL`/`TOKEN`/`SHEET_URL`) from `config.template.json`, which gets
+baked into the installer at build time and is the same for every
+teammate. Each person's name is asked once on first launch and saved to
+their own Windows profile — never shared between installs, never baked
+into the installer.
 
-Give each teammate the built app **plus their own `config.json`** in the
-same folder (everyone shares the same `WEBHOOK_URL`/`TOKEN` — it's the
-Sheet that's shared, not the machine).
+**One-time setup before building** (you only do this once, not per teammate):
 
-These builds are unsigned (no paid code-signing certificate), so:
-- **Windows**: SmartScreen may warn — "More info" → "Run anyway".
-- **Mac**: Gatekeeper will block it — right-click the app → "Open" the
-  first time.
+```
+cd desktop-widget-electron
+cp config.json config.template.json   # if you haven't already made config.json
+```
 
-If that friction is a problem, teammates can instead just run the app
-from source (`npm start` or `python status_widget.py`) if they have
-Node.js or Python installed — no build step needed.
+Then open `config.template.json` and **delete the `YOUR_NAME` line** —
+it should only contain `WEBHOOK_URL`, `TOKEN`, and `SHEET_URL`. This file
+is gitignored (like `config.json`), since it holds the shared token, but
+it does get bundled into the `.exe` you build next.
+
+**Build it** — must run natively on Windows (not through any bridge/VM),
+since electron-builder needs the real OS to produce a proper signed-icon
+NSIS installer:
+
+```
+cd desktop-widget-electron
+npm install
+npm run build:win
+```
+
+First run downloads Electron + builder tooling (a few hundred MB), so it
+can take a few minutes depending on your connection. When it finishes,
+you'll have:
+
+```
+dist\StatusUpdate-Setup.exe
+```
+
+That's the one file to hand to teammates (Slack/Teams/email/shared
+drive — however you'd normally share a file). They just double-click it:
+it installs to their own user profile (no admin rights needed), adds a
+Start Menu + Desktop shortcut, launches automatically, asks for their
+name once, and they're in.
+
+**Mac**: same idea — `npm run build:mac` → `dist/StatusUpdate-*.dmg`.
+Mac doesn't support a fully silent one-click install the way Windows NSIS
+does; teammates drag the app into Applications as usual, but still get
+the same first-run name prompt and shared `config.template.json`.
+
+This build is unsigned (no paid code-signing certificate), so:
+- **Windows**: SmartScreen may warn on first run — "More info" → "Run anyway".
+- **Mac**: Gatekeeper will block it — right-click the app → "Open" the first time.
+
+If you ever change `WEBHOOK_URL`, `TOKEN`, or `SHEET_URL`, update
+`config.template.json` and rebuild — everyone will need the new `.exe`
+(this is the one thing that isn't picked up automatically, since it's
+baked in at build time).
 
 ## 5. Adjust the schedule
 

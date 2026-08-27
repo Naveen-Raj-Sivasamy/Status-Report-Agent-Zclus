@@ -6,5 +6,6 @@ __pycache__/
 *.pyc
 .DS_Store
 desktop-widget-electron/config.json
+desktop-widget-electron/config.template.json
 desktop-widget-electron/node_modules/
 desktop-widget-electron/dist/

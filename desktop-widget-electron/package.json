@@ -13,10 +13,26 @@
     "appId": "org.fairview.statusupdate",
     "productName": "StatusUpdate",
     "directories": { "output": "dist" },
-    "files": ["main.js", "preload.js", "renderer/**/*", "build/**/*", "package.json"],
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "build/**/*",
+      "package.json",
+      "config.template.json"
+    ],
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "artifactName": "StatusUpdate-Setup.exe"
     },
     "mac": {
       "target": "dmg",

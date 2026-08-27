@@ -32,7 +32,7 @@ let floatBtn = null;
 
 // -------------------- backend calls (with retry) --------------------
 
-async function callWithRetry(fn, attempts = 3, delayMs = 2000) {
+async function callWithRetry(fn, attempts = 6, delayMs = 1500) {
   let lastErr;
   for (let i = 1; i <= attempts; i++) {
     try {
@@ -75,7 +75,7 @@ ipcMain.handle('get-tabs', async () => apiGet({ action: 'tabs' }));
 ipcMain.handle('get-columns', async (_e, tab) => apiGet({ action: 'columns', tab }));
 ipcMain.handle('submit-entry', async (_e, { tab, values }) => apiPost(tab, values));
 ipcMain.handle('get-your-name', () => config.YOUR_NAME || '');
-ipcMain.handle('hide-window', () => popup && popup.hide());
+ipcMain.handle('hide-window', () => hidePopup());
 ipcMain.handle('open-sheet', () => {
   if (config.SHEET_URL) shell.openExternal(config.SHEET_URL);
 });
@@ -131,9 +131,14 @@ function positionPopupNearWindow(refBounds) {
   popup.setPosition(x, y, false);
 }
 
+function hidePopup() {
+  popup.hide();
+  if (floatBtn) floatBtn.show(); // bring the floating icon back once the form is closed
+}
+
 function toggleWindow() {
   if (popup.isVisible() && popup.isFocused()) {
-    popup.hide();
+    hidePopup();
     return;
   }
   if (popup.isVisible() && !popup.isFocused()) {
@@ -144,6 +149,7 @@ function toggleWindow() {
   }
   const refBounds = floatBtn ? floatBtn.getBounds() : tray.getBounds();
   positionPopupNearWindow(refBounds);
+  if (floatBtn) floatBtn.hide(); // avoid showing both the icon and the open form at once
   popup.show();
   popup.focus();
   popup.webContents.send('opened');

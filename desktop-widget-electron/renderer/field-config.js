@@ -13,14 +13,14 @@ const FIELD_CONFIG = {
     Week: { type: 'week-auto', basedOn: 'Date' },
     Status: { type: 'select', options: ['Done', 'Pending', 'In Progress', 'Open'] },
     Priority: { type: 'select', options: ['High', 'Medium', 'Low'] },
-    'Assigned to': { type: 'select', options: ASSIGNEES },
+    'Assigned to': { type: 'multiselect', options: ASSIGNEES },
   },
   Adhoc_Mails: {
     Requester: { type: 'select', options: REQUESTERS },
     Site: { type: 'select', options: SITES },
     Date: { type: 'date' },
     Week: { type: 'week-auto', basedOn: 'Date' },
-    'Assigned to': { type: 'select', options: ASSIGNEES },
+    'Assigned to': { type: 'multiselect', options: ASSIGNEES },
   },
   Cleanup_Activities: {
     Volume: { type: 'select', options: ['Large', 'Medium', 'Small'] },
@@ -28,19 +28,30 @@ const FIELD_CONFIG = {
     'Site Impacted': { type: 'select', options: SITES },
     Date: { type: 'date' },
     Week: { type: 'week-auto', basedOn: 'Date' },
-    'Assigned to': { type: 'select', options: ASSIGNEES },
+    'Assigned to': { type: 'multiselect', options: ASSIGNEES },
   },
   'Drupal_Bugs_&_Improvements': {
     Website: { type: 'select', options: SITES },
     Date: { type: 'date' },
     Week: { type: 'week-auto', basedOn: 'Date' },
     Type: { type: 'select', options: ['Bug', 'Fix', 'Suggestion'] },
-    'Assigned to': { type: 'select', options: ASSIGNEES },
+    'Assigned to': { type: 'multiselect', options: ASSIGNEES },
   },
 };
 
+function normalizeKey(s) {
+  return String(s).trim().toLowerCase();
+}
+
+// Matches column names case-insensitively (and ignoring stray whitespace),
+// since the sheet's actual header casing ("Assigned To" vs "Assigned to")
+// won't always match this config exactly.
 function fieldSpecFor(tab, column) {
-  return (FIELD_CONFIG[tab] && FIELD_CONFIG[tab][column]) || null;
+  const tabConfig = FIELD_CONFIG[tab];
+  if (!tabConfig) return null;
+  const target = normalizeKey(column);
+  const matchKey = Object.keys(tabConfig).find((k) => normalizeKey(k) === target);
+  return matchKey ? tabConfig[matchKey] : null;
 }
 
 function computeWeekLabel(dateStr) {

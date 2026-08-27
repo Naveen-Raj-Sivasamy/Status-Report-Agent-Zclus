@@ -8,26 +8,22 @@
     background: transparent;
     overflow: hidden;
   }
-  /* Outer ring: this is the drag handle — grab near the edge to move it. */
+  /* Outer: just a transparent drag rim, no visible styling at all. */
   #btn {
-    width: 56px; height: 56px; border-radius: 50%;
-    background: #6e1b2c;
-    border: 2px solid rgba(255,255,255,0.85);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    width: 100%; height: 100%;
     display: flex; align-items: center; justify-content: center;
     -webkit-user-select: none;
     -webkit-app-region: drag;
   }
-  /* Inner circle: this is the click target — deliberately NOT a drag
-     region, because app-region:drag swallows click events entirely. */
+  /* Inner: the click target — your icon exactly as uploaded, no background/border. */
   #hit {
-    width: 42px; height: 42px; border-radius: 50%;
+    width: 46px; height: 46px;
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
     -webkit-app-region: no-drag;
   }
   #hit img {
-    width: 32px; height: 32px; object-fit: contain;
+    width: 100%; height: 100%; object-fit: contain;
     pointer-events: none; /* clicks land on #hit, not the image itself */
   }
 </style>

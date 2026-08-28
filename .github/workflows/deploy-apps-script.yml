@@ -28,7 +28,7 @@ jobs:
       # The existing deployment's ID — same one the desktop widget's
       # WEBHOOK_URL already points to. If you ever delete and recreate the
       # deployment in the Apps Script UI, update this to the new ID.
-      DEPLOYMENT_ID: AKfycbywbsjd7svRa4xOv-LPnsucf0RBjw_hF3yTP--kLpgH5YGfq9YlZGNLw2Q5VJhRCws5lA
+      DEPLOYMENT_ID: AKfycbywbsjd7svRa4xOv-LPnsucf0RBjw_hF3yTP--kLpgH5YGfq9YIZGNLw2Q5VJhRCws5lA
     steps:
       - uses: actions/checkout@v4
 

@@ -663,13 +663,27 @@
 
   // Version badge + "there's a newer build" nudge — checked once per app
   // launch (not on every popup open, to keep re-opening the form instant).
+  // Returns true only if `a` is strictly newer than `b` (semver-ish "x.y.z"
+  // compare, not just string inequality — otherwise a stale LatestVersion
+  // behind the running app's own version would wrongly show "update available").
+  function isNewerVersion(a, b) {
+    const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+    const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const da = pa[i] || 0;
+      const db = pb[i] || 0;
+      if (da !== db) return da > db;
+    }
+    return false;
+  }
+
   async function checkAppVersion() {
     try {
       const version = await window.statusApp.getAppVersion();
       els.versionBadge.textContent = `v${version}`;
 
       const latest = await window.statusApp.checkLatestVersion();
-      if (latest && latest.ok && latest.latest && latest.latest !== version) {
+      if (latest && latest.ok && latest.latest && isNewerVersion(latest.latest, version)) {
         els.updateBannerText.textContent =
           `A newer version (v${latest.latest}) is available — update to get the latest changes.`;
         els.updateBanner.classList.remove('hidden');

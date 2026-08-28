@@ -1,0 +1,52 @@
+name: Auto Tag Release
+
+# Removes the last manual step in shipping a new widget build. Previously
+# you had to bump "version" in desktop-widget-electron/package.json, push,
+# and THEN manually run:
+#   git tag v<version> && git push origin v<version>
+# ...to actually trigger build-release.yml. This workflow does that tag/push
+# for you automatically, the moment a version bump lands on main — so
+# shipping a new version is just "bump the version, commit, push" and
+# everything downstream (installer build, GitHub Release, LatestVersion
+# bump in the sheet) happens with zero manual intervention.
+#
+# Safe to re-run / re-push without side effects: if the tag for the current
+# version already exists, this is a no-op.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop-widget-electron/package.json'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from package.json
+        id: v
+        run: |
+          VERSION=$(node -pe "require('./desktop-widget-electron/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag if it doesn't exist yet
+        env:
+          TAG: v${{ steps.v.outputs.version }}
+        run: |
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — nothing to do (version wasn't bumped, or was already released)."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          echo "Pushed $TAG — build-release.yml will pick it up from here."

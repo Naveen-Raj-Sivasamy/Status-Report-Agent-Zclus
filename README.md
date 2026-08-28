@@ -184,9 +184,10 @@ baked in at build time).
 
 ### Continuous deployment (CI/CD) — everything below is automatic
 
-Two GitHub Actions workflows do all of this for you now. You never need
-to open the Apps Script editor by hand, and you never need to build the
-installer on your own machine again.
+Three GitHub Actions workflows do all of this for you now. You never need
+to open the Apps Script editor by hand, you never need to build the
+installer on your own machine, and you never need to manually tag a
+release either.
 
 **`.github/workflows/deploy-apps-script.yml`** — runs on every push to
 `main` that touches `apps-script/**`. It pushes `Code.gs` /
@@ -195,14 +196,20 @@ installer on your own machine again.
 version, re-using the SAME deployment ID the widget already talks to — so
 the web app URL never changes and nobody needs to update `config.json`.
 
-**`.github/workflows/build-release.yml`** — runs whenever you push a git
-tag like `v1.3.0`. It builds the Windows installer on a clean
-`windows-latest` runner, publishes it as a GitHub Release asset named
-`StatusUpdate-Setup.exe`, and calls the Apps Script web app's
-`setLatestVersion` action so the `_Config` tab's `LatestVersion` updates
-itself. The release asset filename never changes between releases, so this
-link always points at the newest build and is what's stored as
-`DownloadUrl` (set once, permanently):
+**`.github/workflows/auto-tag-release.yml`** — runs on every push to `main`
+that touches `desktop-widget-electron/package.json`. If the `version` field
+changed, it creates and pushes the matching `v<version>` git tag itself —
+that tag push is what actually triggers a release, so you no longer touch
+`git tag` by hand at all.
+
+**`.github/workflows/build-release.yml`** — runs whenever a `v*.*.*` tag is
+pushed (now done automatically by the workflow above). It builds the
+Windows installer on a clean `windows-latest` runner, publishes it as a
+GitHub Release asset named `StatusUpdate-Setup.exe`, and calls the Apps
+Script web app's `setLatestVersion` action so the `_Config` tab's
+`LatestVersion` updates itself. The release asset filename never changes
+between releases, so this link always points at the newest build and is
+what's stored as `DownloadUrl` (set once, permanently):
 
 ```
 https://github.com/<owner>/<repo>/releases/latest/download/StatusUpdate-Setup.exe
@@ -233,14 +240,10 @@ https://github.com/<owner>/<repo>/releases/latest/download/StatusUpdate-Setup.ex
   all needed, per the note at the top of `Code.gs`... but pushing is still
   how the change reaches everyone else's copy of the repo, so push anyway.)
 - **App/UI change** (needs a new installer): bump `"version"` in
-  `desktop-widget-electron/package.json`, commit, then:
-  ```
-  git tag v1.3.0
-  git push origin v1.3.0
-  ```
-  That's it — the build, the GitHub Release, and the `LatestVersion` bump
-  all happen automatically. Everyone still on an older version sees the
-  in-app update banner within a few minutes.
+  `desktop-widget-electron/package.json` and push to `main`. That's it —
+  the tag, the build, the GitHub Release, and the `LatestVersion` bump all
+  happen automatically from there. Everyone still on an older version sees
+  the in-app update banner within a few minutes.
 
 ## 5. Adjust the schedule
 

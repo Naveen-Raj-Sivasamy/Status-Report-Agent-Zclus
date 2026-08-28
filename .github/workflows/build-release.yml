@@ -8,11 +8,12 @@ name: Build and Release Installer
 # That link is what's stored in the Google Sheet's _Config tab as
 # DownloadUrl (set once, never needs updating again).
 #
-# To ship a new version:
-#   1. Bump "version" in desktop-widget-electron/package.json
-#   2. Commit it, then: git tag v<version> && git push origin v<version>
-# This workflow builds, releases, and tells the running app about the new
-# version automatically (via the setLatestVersion action in Code.gs).
+# Triggered by a "v*.*.*" tag push — which you never have to do by hand:
+# auto-tag-release.yml pushes that tag itself the moment a version bump in
+# desktop-widget-electron/package.json lands on main. So shipping a new
+# version is just "bump the version, commit, push"; this workflow then
+# builds, releases, and tells the running app about the new version
+# automatically (via the setLatestVersion action in Code.gs).
 #
 # One-time setup required (see README.md "Continuous deployment" section):
 #   Add a repo secret named CONFIG_TEMPLATE_JSON containing the exact JSON

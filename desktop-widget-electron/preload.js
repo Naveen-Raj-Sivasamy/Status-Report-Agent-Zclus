@@ -17,5 +17,6 @@ contextBridge.exposeInMainWorld('statusApp', {
   showFabMenu: () => ipcRenderer.invoke('show-fab-menu'),
   saveYourName: (name) => ipcRenderer.invoke('save-your-name', name),
   onOpened: (callback) => ipcRenderer.on('opened', callback),
+  onSubmitRetry: (callback) => ipcRenderer.on('submit-retry', (_e, info) => callback(info)),
   resizeWindow: (height) => ipcRenderer.send('resize-window', height),
 });

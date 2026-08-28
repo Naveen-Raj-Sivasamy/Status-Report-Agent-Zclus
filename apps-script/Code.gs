@@ -72,6 +72,13 @@ var HIDDEN_TABS = ['Weekly_Monthly_Summary'];
 // after such a change if you don't want to wait this out.
 var CACHE_SECONDS = 300;
 
+// How long (ms) a save waits for the write lock before giving up and
+// telling the widget to retry, instead of queuing silently. Kept well
+// under the widget's own per-attempt timeout (see REQUEST_TIMEOUT_MS in
+// main.js) so a busy backend fails fast and visibly rather than looking
+// like a permanent hang.
+var LOCK_WAIT_MS = 10000;
+
 // =============================== API ======================================
 
 function doGet(e) {
@@ -156,7 +163,25 @@ function doPost(e) {
       return Object.prototype.hasOwnProperty.call(values, col) ? values[col] : '';
     });
 
-    sheet.appendRow(row);
+    // Without a lock, two people submitting within the same second or two
+    // (common right before the Friday cutoff) race on appendRow, and on top
+    // of that every append forces Sheets to recalculate every formula in
+    // the workbook (see the Weekly_Monthly_Summary comment above) — so a
+    // pile-up of concurrent doPost calls can each end up waiting on the
+    // others for minutes with no feedback, which is what made the widget
+    // look permanently stuck on "Saving..." for everyone at once. Bound the
+    // wait instead: fail fast with a clear, retryable error rather than
+    // letting requests queue silently. (LOCK_WAIT_MS applies only around
+    // the actual write — reads elsewhere are unaffected.)
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(LOCK_WAIT_MS)) {
+      return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+    }
+    try {
+      sheet.appendRow(row);
+    } finally {
+      lock.releaseLock();
+    }
     return jsonOut({ ok: true, message: 'Saved to "' + body.tab + '".' });
   } catch (err) {
     return jsonOut({ ok: false, error: String(err) });

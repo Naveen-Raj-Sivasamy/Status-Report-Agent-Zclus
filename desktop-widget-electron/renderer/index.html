@@ -254,6 +254,18 @@
 
   let yourName = '';
 
+  // A save that needed a retry used to just sit there saying "Saving..."
+  // for up to ~4.5 minutes with zero feedback, which looked identically
+  // "stuck" to every user the instant the backend was slow even once.
+  // Surface what's actually happening instead. Registered once, globally
+  // (not inside showForm) since els.submitBtn is a stable, reused element —
+  // guarded on .disabled so a stray late event can't clobber unrelated text.
+  window.statusApp.onSubmitRetry(({ attempt, attempts }) => {
+    if (els.submitBtn && els.submitBtn.disabled) {
+      els.submitBtn.textContent = `Saving… (retry ${attempt}/${attempts})`;
+    }
+  });
+
   function showLoading(msg) {
     els.footer.classList.add('hidden');
     els.reportActions.classList.add('hidden');

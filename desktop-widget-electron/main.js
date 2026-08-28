@@ -62,7 +62,17 @@ let setupWin = null;
 
 // -------------------- backend calls (with retry) --------------------
 
-async function callWithRetry(fn, attempts = 6) {
+// Was 6 attempts x a 45s timeout each (worst case ~4.5 minutes of the
+// widget silently showing "Saving...") — that's what made a single slow
+// backend call (e.g. Sheets doing a full-workbook formula recalc, or many
+// people submitting near the Friday cutoff) look like it was stuck forever,
+// identically for everyone hitting the same backend. Fail faster instead,
+// and let the caller report retry progress so the UI can say what's
+// actually happening rather than a blank "Saving...".
+const RETRY_ATTEMPTS = 3;
+const REQUEST_TIMEOUT_MS = 15000;
+
+async function callWithRetry(fn, { attempts = RETRY_ATTEMPTS, onRetry } = {}) {
   let lastErr;
   for (let i = 1; i <= attempts; i++) {
     try {
@@ -70,7 +80,8 @@ async function callWithRetry(fn, attempts = 6) {
     } catch (err) {
       lastErr = err;
       if (i < attempts) {
-        // Exponential backoff (500ms, 1s, 2s, 4s, ...): fast to recover from
+        if (onRetry) onRetry(i, attempts, err);
+        // Exponential backoff (500ms, 1s, 2s, ...): fast to recover from
         // a single blip, patient enough for a slow cold start.
         const delay = Math.min(500 * 2 ** (i - 1), 4000);
         await new Promise((r) => setTimeout(r, delay));
@@ -80,34 +91,34 @@ async function callWithRetry(fn, attempts = 6) {
   throw lastErr;
 }
 
-async function apiGet(params) {
+async function apiGet(params, opts) {
   const url = new URL(config.WEBHOOK_URL);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   return callWithRetry(async () => {
-    const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(45000) });
+    const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     if (!data.ok) throw new Error(data.error || 'Unknown API error');
     return data;
-  });
+  }, opts);
 }
 
-async function apiPostBody(body) {
+async function apiPostBody(body, opts) {
   return callWithRetry(async () => {
     const resp = await fetch(config.WEBHOOK_URL, {
       method: 'POST',
       body: JSON.stringify(Object.assign({ token: config.TOKEN }, body)),
-      signal: AbortSignal.timeout(45000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     if (!data.ok) throw new Error(data.error || 'Unknown API error');
     return data;
-  });
+  }, opts);
 }
 
-async function apiPost(tab, values) {
-  return apiPostBody({ tab, values });
+async function apiPost(tab, values, opts) {
+  return apiPostBody({ tab, values }, opts);
 }
 
 // In-memory cache the widget serves from instantly, refreshed in the
@@ -162,8 +173,16 @@ ipcMain.handle('get-columns', async (_e, tab) => {
   }
   return refreshColumnsCache(tab);
 });
-ipcMain.handle('submit-entry', async (_e, { tab, values }) => {
-  const result = await apiPost(tab, values);
+ipcMain.handle('submit-entry', async (event, { tab, values }) => {
+  const result = await apiPost(tab, values, {
+    onRetry: (attempt, attempts) => {
+      // Let the popup show real progress ("retrying 2/3") instead of a
+      // static "Saving..." that looks frozen while we're still working on it.
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('submit-retry', { attempt: attempt + 1, attempts });
+      }
+    },
+  });
   refreshColumnsCache(tab); // e.g. so the next "Cleanup Number" reflects this new row right away
   return result;
 });

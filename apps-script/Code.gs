@@ -82,19 +82,26 @@ var LOCK_WAIT_MS = 10000;
 // =============================== API ======================================
 
 function doGet(e) {
-  var action = e.parameter.action;
+  // `e` (and e.parameter) is only ever missing when someone runs doGet
+  // directly from the Apps Script editor's "Run" button instead of hitting
+  // the real web app URL — the editor calls it with no arguments. That's a
+  // harmless way to end up in the Executions log with a TypeError here, but
+  // guard it anyway so it can't crash outside the try/catch below for any
+  // other reason either.
+  var params = (e && e.parameter) || {};
+  var action = params.action;
   try {
     if (action === 'tabs') {
       return jsonOut({ ok: true, tabs: cached('tabs', listVisibleTabs) });
     }
     if (action === 'columns') {
-      var tab = e.parameter.tab;
+      var tab = params.tab;
       var columns = cached('columns:' + tab, function () { return getColumns(tab); });
       return jsonOut({ ok: true, tab: tab, columns: columns });
     }
     if (action === 'nextNumber') {
-      var seqTab = e.parameter.tab;
-      var seqColumn = e.parameter.column;
+      var seqTab = params.tab;
+      var seqColumn = params.column;
       return jsonOut({ ok: true, next: getNextSequenceNumber(seqTab, seqColumn) });
     }
     if (action === 'version') {

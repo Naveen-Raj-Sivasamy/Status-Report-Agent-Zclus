@@ -12,6 +12,15 @@ name: Auto Tag Release
 #
 # Safe to re-run / re-push without side effects: if the tag for the current
 # version already exists, this is a no-op.
+#
+# IMPORTANT: a tag pushed using the default GITHUB_TOKEN does NOT trigger
+# other workflows — GitHub deliberately blocks event chaining through the
+# built-in token to stop runaway loops. So pushing the tag alone would
+# silently never build anything. Instead of working around that with a
+# personal access token (one more secret to create and rotate), we push
+# the tag for the record/history and then explicitly kick off
+# build-release.yml ourselves via `gh workflow run`, which — unlike a
+# push event — GITHUB_TOKEN IS allowed to do.
 
 on:
   push:
@@ -22,6 +31,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   tag:
@@ -38,15 +48,26 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag if it doesn't exist yet
+        id: create_tag
         env:
           TAG: v${{ steps.v.outputs.version }}
         run: |
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists — nothing to do (version wasn't bumped, or was already released)."
+            echo "created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
-          echo "Pushed $TAG — build-release.yml will pick it up from here."
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger the release build
+        if: steps.create_tag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.v.outputs.version }}
+        run: |
+          gh workflow run build-release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+          echo "Dispatched build-release.yml for $TAG."

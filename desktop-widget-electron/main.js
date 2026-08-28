@@ -202,8 +202,8 @@ ipcMain.handle('hide-window', () => hidePopup());
 // renderer measures its own content and asks us to resize to fit, on
 // every render. Clamped so it can never grow absurdly tall or shrink to
 // nothing; content beyond the max just scrolls (main already does that).
-const MIN_POPUP_HEIGHT = 220;
-const MAX_POPUP_HEIGHT = 640;
+const MIN_POPUP_HEIGHT = 264; // +20%
+const MAX_POPUP_HEIGHT = 768; // +20%
 ipcMain.on('resize-window', (_e, height) => {
   if (!popup) return;
   const clamped = Math.max(MIN_POPUP_HEIGHT, Math.min(MAX_POPUP_HEIGHT, Math.round(height)));
@@ -267,8 +267,8 @@ function createSetupWindow() {
 
 function createPopup() {
   const win = new BrowserWindow({
-    width: 380,
-    height: 420, // corrected to fit real content right after first paint — see resize-window
+    width: 456, // 380 +20%
+    height: 504, // 420 +20% — corrected to fit real content right after first paint — see resize-window
     show: false,
     frame: false,
     resizable: false,

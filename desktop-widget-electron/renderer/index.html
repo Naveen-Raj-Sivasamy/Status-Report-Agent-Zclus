@@ -35,7 +35,7 @@
     background: var(--brand);
     border: 1px solid rgba(0,0,0,0.25);
     border-radius: 16px;
-    box-shadow: 0 16px 44px rgba(0,0,0,0.5);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18);
     overflow: hidden;
   }
   header {
@@ -56,7 +56,7 @@
   }
   .icon-btn:hover { background: rgba(255,255,255,0.24); }
 
-  main { overflow-y: auto; padding: 6px 16px 12px; max-height: 420px; }
+  main { overflow-y: auto; padding: 6px 16px 12px; max-height: 504px; }
 
   .tab-btn {
     width: 100%; text-align: left;
@@ -83,16 +83,24 @@
     background: rgba(255,255,255,0.16); padding: 2px 6px; border-radius: 8px;
     vertical-align: middle; margin-left: 4px;
   }
-  .update-banner {
-    display: flex; align-items: center; justify-content: space-between; gap: 10px;
-    background: #ffb700; color: #2a2020; font-size: 11px; font-weight: 700;
-    padding: 8px 16px; -webkit-app-region: no-drag;
+  .update-link {
+    display: none; align-items: center; gap: 4px;
+    background: linear-gradient(135deg, #ffe08a, #ffb700);
+    color: #2a2020; font-size: 10.5px; font-weight: 800;
+    border: none; border-radius: 999px; padding: 5px 10px;
+    cursor: pointer; -webkit-app-region: no-drag;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }
-  .update-banner button {
-    background: #2a2020; color: #ffffff; border: none; border-radius: 6px;
-    padding: 5px 10px; font-weight: 700; font-size: 11px; cursor: pointer; flex-shrink: 0;
+  .update-link::before { content: "\2728"; font-size: 10px; }
+  .update-link:hover { background: linear-gradient(135deg, #ffe9a8, #ffc633); }
+  .update-link.visible {
+    display: inline-flex;
+    animation: update-blink 0.4s ease-in-out 5;
   }
-  .update-banner button:hover { background: #3a2a2a; }
+  @keyframes update-blink {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.94); }
+  }
 
   .report-form-actions { display: flex; gap: 8px; margin-top: 6px; }
   .report-form-actions .amber-btn { flex: 1; }
@@ -194,6 +202,8 @@
     text-align: center; font-size: 9.5px; color: var(--on-brand-dim);
     padding: 6px 0 10px; opacity: 0.9; font-weight: 700;
   }
+  .credit-link { color: inherit; text-decoration: underline; cursor: pointer; }
+  .credit-link:hover { color: #ffffff; }
 
   .hidden { display: none !important; }
 </style>
@@ -206,15 +216,10 @@
         <div class="sub" id="header-sub">What are you logging status for?</div>
       </div>
       <div class="header-actions">
-        <button class="icon-btn" id="sheet-btn" title="Open the Google Sheet">📄</button>
+        <button class="update-link" id="update-link" title="A newer version is available">Update available</button>
         <button class="icon-btn" id="close-btn" title="Close">✕</button>
       </div>
     </header>
-
-    <div class="update-banner hidden" id="update-banner">
-      <span id="update-banner-text"></span>
-      <button id="update-banner-btn">Get it</button>
-    </div>
 
     <main id="main"></main>
 
@@ -228,7 +233,7 @@
       <button class="primary" id="submit-btn">Submit</button>
     </footer>
 
-    <div class="credit">Developed by Naveen Raj Sivasamy</div>
+    <div class="credit">Developed by <a href="#" id="credit-link" class="credit-link">Naveen Raj Sivasamy</a></div>
   </div>
 
 <script src="field-config.js"></script>
@@ -240,14 +245,11 @@
     submitBtn: document.getElementById('submit-btn'),
     cancelBtn: document.getElementById('cancel-btn'),
     closeBtn: document.getElementById('close-btn'),
-    sheetBtn: document.getElementById('sheet-btn'),
     reportActions: document.getElementById('report-actions'),
     viewReportBtn: document.getElementById('view-report-btn'),
     submitReportBtn: document.getElementById('submit-report-btn'),
     versionBadge: document.getElementById('version-badge'),
-    updateBanner: document.getElementById('update-banner'),
-    updateBannerText: document.getElementById('update-banner-text'),
-    updateBannerBtn: document.getElementById('update-banner-btn'),
+    updateLink: document.getElementById('update-link'),
   };
 
   let yourName = '';
@@ -657,7 +659,10 @@
   }
 
   els.closeBtn.onclick = () => window.statusApp.hideWindow();
-  els.sheetBtn.onclick = () => window.statusApp.openSheet();
+  document.getElementById('credit-link').onclick = (e) => {
+    e.preventDefault();
+    window.statusApp.openExternal('https://www.linkedin.com/in/naveen-raj-sivasamy-603826196');
+  };
   els.viewReportBtn.onclick = () => window.statusApp.openSheet();
   els.submitReportBtn.onclick = () => showReportOptions();
 
@@ -684,15 +689,12 @@
 
       const latest = await window.statusApp.checkLatestVersion();
       if (latest && latest.ok && latest.latest && isNewerVersion(latest.latest, version)) {
-        els.updateBannerText.textContent =
-          `A newer version (v${latest.latest}) is available — update to get the latest changes.`;
-        els.updateBanner.classList.remove('hidden');
-        if (latest.downloadUrl) {
-          els.updateBannerBtn.classList.remove('hidden');
-          els.updateBannerBtn.onclick = () => window.statusApp.openExternal(latest.downloadUrl);
-        } else {
-          els.updateBannerBtn.classList.add('hidden');
-        }
+        const downloadUrl = latest.downloadUrl;
+        els.updateLink.title = `Update available — v${latest.latest}`;
+        els.updateLink.onclick = () => {
+          if (downloadUrl) window.statusApp.openExternal(downloadUrl);
+        };
+        els.updateLink.classList.add('visible');
       }
     } catch {
       /* best-effort — never block the app over a version check */

@@ -56,7 +56,7 @@
   }
   .icon-btn:hover { background: rgba(255,255,255,0.24); }
 
-  main { overflow-y: auto; padding: 6px 16px 12px; max-height: 605px; } /* 504 +20% */
+  main { overflow-y: auto; padding: 6px 16px 12px; max-height: 605px; } /* cap: 504 +20% */
 
   .tab-btn {
     width: 100%; text-align: left;
@@ -76,8 +76,12 @@
   .tab-btn:active { transform: scale(0.98); }
 
   /* Persistent bar pinned below the (scrollable) tab list — outside `main`,
-     so it never shifts up/down as tabs are added or removed. */
-  .report-actions { display: flex; gap: 8px; padding: 8px 16px 12px; border-top: 1px solid rgba(255,255,255,0.14); }
+     so it never shifts up/down as tabs are added or removed. margin-top is
+     the deliberate visible gap between the tab list and these two CTAs
+     (as opposed to padding-top, which would sit *inside* the border-top
+     line below and just tighten the divider instead of separating it from
+     the tab list above). */
+  .report-actions { display: flex; gap: 8px; margin-top: 24px; padding: 8px 16px 12px; border-top: 1px solid rgba(255,255,255,0.14); }
   .version-badge {
     font-size: 9px; font-weight: 700; color: var(--on-brand-dim);
     background: rgba(255,255,255,0.16); padding: 2px 6px; border-radius: 8px;

@@ -205,9 +205,16 @@ ipcMain.handle('get-your-name', () => config.YOUR_NAME || '');
 ipcMain.handle('get-app-version', () => APP_VERSION);
 ipcMain.handle('check-latest-version', async () => {
   try {
-    return await apiGet({ action: 'version' });
+    // Unlike a save, nobody is staring at a "Saving..." button waiting on
+    // this — it runs once in the background at launch and only ever
+    // updates a small badge. So it can afford to be more patient than
+    // RETRY_ATTEMPTS (3) and just quietly retry longer instead of giving
+    // up and silently hiding the update banner the moment the backend has
+    // one slow beat — which is what made the banner flicker in and out
+    // across relaunches even though a newer version really was available.
+    return await apiGet({ action: 'version' }, { attempts: 6 });
   } catch {
-    return null; // never block the app on a version check
+    return null; // still never block the app on a version check
   }
 });
 ipcMain.handle('open-external', (_e, url) => {

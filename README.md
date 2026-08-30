@@ -41,10 +41,21 @@ came in (the script fills it in automatically; leave it out of the form).
 3. Project Settings (gear icon) → check **"Show appsscript.json manifest
    file in editor"** → open `appsscript.json` and replace it with
    [`apps-script/appsscript.json`](apps-script/appsscript.json).
-4. Back in `Code.gs`, edit the CONFIG block at the top:
-   - `SHARED_SECRET` — make up a random string (this is your `TOKEN`).
-   - `REPORT_RECIPIENTS` — the email addresses that get the Friday report.
-   - `TEAMS_WEBHOOK_URL` — optional, see below.
+4. `TEAMS_WEBHOOK_URL` in the CONFIG block is the one thing still edited
+   directly in `Code.gs` (optional, see below) — `SHARED_SECRET` and
+   `REPORT_RECIPIENTS` are NOT: this repo is public, so hardcoding a real
+   token/email list here would mean anyone on the internet could read
+   them. Instead:
+   - In the function dropdown, select **`setupScriptProperties`**, paste
+     your real secret and recipient list into the three lines inside it,
+     click **Run**, then delete those pasted values again (that function's
+     own comment explains why). `SHARED_SECRET` is your `TOKEN`.
+   - Or skip that function entirely and set `SHARED_SECRET` /
+     `REPORT_RECIPIENTS` (comma-separated) / `REMINDER_RECIPIENTS`
+     directly under **Project Settings → Script Properties** — same
+     effect, without ever pasting real values into a function body.
+   - The API refuses every write with "Invalid token" until `SHARED_SECRET`
+     is actually set this way — that's deliberate (fails closed, not open).
 5. **Deploy → New deployment → Web app**.
    - Execute as: **Me**
    - Who has access: **Anyone**
@@ -232,10 +243,10 @@ the same right-click-to-open workaround described above.
 **Shipping a new version from then on:**
 
 - **Backend-only change** (Code.gs): just `git push` to `main`. Deployed
-  automatically within ~1 minute. (A pure *data* change — like editing
-  `REPORT_RECIPIENTS` — also applies within a few minutes with no push at
-  all needed, per the note at the top of `Code.gs`... but pushing is still
-  how the change reaches everyone else's copy of the repo, so push anyway.)
+  automatically within ~1 minute. (Changing who's on `REPORT_RECIPIENTS`,
+  or rotating `SHARED_SECRET`, isn't a code change at all any more — both
+  live in Script Properties now, edited directly in the Apps Script editor,
+  no push needed.)
 - **App/UI change** (needs a new installer): bump `"version"` in
   `desktop-widget-electron/package.json` and push to `main`. That's it —
   the tag, the build, the GitHub Release, and the `LatestVersion` bump all
@@ -256,10 +267,7 @@ Defaults: reminder at 6pm Friday, report at 11pm Friday, both in the
 - The Web App is reachable by anyone who has the exact URL (Google
   doesn't index or guess these), and the `TOKEN` check in `doPost` blocks
   casual misuse — but treat the URL and token as semi-secret.
-- `compileAndSendReport` emails the **entire spreadsheet** as an `.xlsx`
-  attachment every Friday — it does not filter to "this week only". If
-  you want a week-scoped report instead (only rows since last Monday),
-  say so and the report function can be changed to build a filtered
-  HTML/CSV summary instead of exporting the whole file.
-- Recipient list: currently just `nav13418@fairview.org` — add more
-  addresses to `REPORT_RECIPIENTS` in `Code.gs` any time.
+- `compileAndSendReport` emails only **this week's rows (Mon-Fri)** from
+  `REPORT_TABS`, as a filtered `.xlsx` — not the entire spreadsheet.
+- Recipient list and the shared token both live in this Apps Script
+  project's Script Properties, not in `Code.gs` — see step 4 above.

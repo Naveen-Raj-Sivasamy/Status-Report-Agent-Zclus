@@ -34,27 +34,48 @@
  * up in the widget automatically too, but the compiled weekly report only
  * ever pulls from REPORT_TABS below; add a tab's name there yourself if
  * you want it folded into the report as well.
+ *
+ * REQUIRED ONE-TIME SETUP: SHARED_SECRET and the recipient lists are NOT
+ * hardcoded in this file (this repo is public — a committed secret/PII
+ * would be readable by anyone). Run setupScriptProperties() once from the
+ * editor first, or the API will refuse every write with "Invalid token."
+ * See that function's comment for details.
  */
 
 // ============================= CONFIG =====================================
 
+// SHARED_SECRET and the recipient lists below used to be hardcoded right
+// here — fine for a private script, but this repo is public, which meant
+// a real, live auth token and real people's email addresses sat in plain
+// text for anyone on the internet to read. Both now come from this Apps
+// Script project's own Script Properties instead (Project Settings >
+// Script Properties in the editor — or run setupScriptProperties() once,
+// see below): never committed, never visible in this file or its history
+// going forward. Nothing here needs editing again to rotate the token or
+// change who gets emailed; that all happens in Script Properties now.
+function getScriptProp_(key) {
+  return PropertiesService.getScriptProperties().getProperty(key) || '';
+}
+function getScriptPropList_(key) {
+  return getScriptProp_(key).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+}
+
 // Shared secret the desktop widget must send. Keeps random visitors who
-// somehow get the web app URL from writing junk rows. Change this to your
-// own random string, and put the same value in the widget's config.json.
-var SHARED_SECRET = 'FnKzihGF3xrFOthBuApKgGAQVd1s1aKQ';
+// somehow get the web app URL from writing junk rows. Rotate it any time
+// via Script Properties (or setupScriptProperties()) — put the matching
+// value in the widget's config.json / config.template.json.
+var SHARED_SECRET = getScriptProp_('SHARED_SECRET');
 
-// Who gets the Friday reminder + the final compiled report.
-// Add more addresses any time — no redeploy needed for RECIPIENTS/REMINDER_RECIPIENTS.
-var REPORT_RECIPIENTS = [
-  'Suryaraj.Rathanasamy@fairview.org',
-  'Amulya.Kumar@fairview.org',
-  'nav13418@fairview.org',
-  'naveenrajsivasamy@gmail.com',
-  'naveen@zclus.com',
-  'amulya@zclus.com'
-];
+// Who gets the Friday reminder + the final compiled report. Comma-
+// separated in the SCRIPT_PROPERTIES value; add/remove addresses any
+// time there — no redeploy needed.
+var REPORT_RECIPIENTS = getScriptPropList_('REPORT_RECIPIENTS');
 
-var REMINDER_RECIPIENTS = REPORT_RECIPIENTS; // usually the same list
+// Optional separate list for just the Friday reminder — set a
+// REMINDER_RECIPIENTS Script Property only if you want it to differ from
+// REPORT_RECIPIENTS; leave it unset to reuse the same list (the common case).
+var REMINDER_RECIPIENTS_OVERRIDE_ = getScriptPropList_('REMINDER_RECIPIENTS');
+var REMINDER_RECIPIENTS = REMINDER_RECIPIENTS_OVERRIDE_.length ? REMINDER_RECIPIENTS_OVERRIDE_ : REPORT_RECIPIENTS;
 
 // Optional: a Microsoft Teams "Incoming Webhook" URL for a channel, if you
 // want the Friday reminder posted to Teams as well as emailed. Leave blank
@@ -152,7 +173,14 @@ function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
 
-    if (SHARED_SECRET && body.token !== SHARED_SECRET) {
+    // Was `if (SHARED_SECRET && body.token !== SHARED_SECRET)` — meaning
+    // an EMPTY SHARED_SECRET disabled the check entirely (auth optional).
+    // That's exactly the state this project is in right until
+    // setupScriptProperties() is run for the first time, which made "not
+    // configured yet" silently equivalent to "wide open to anyone with the
+    // URL" instead of refusing writes until it's actually set up. Fail
+    // closed instead: no secret configured means no writes accepted.
+    if (!SHARED_SECRET || body.token !== SHARED_SECRET) {
       return jsonOut({ ok: false, error: 'Invalid token.' });
     }
 
@@ -248,6 +276,31 @@ function authorizeApis() {
   DriveApp.getFileById(temp.getId()).setTrashed(true);
   var quota = MailApp.getRemainingDailyQuota();
   Logger.log('Authorized. Remaining mail quota today: ' + quota);
+}
+
+/**
+ * Run this ONCE from the editor (select it in the function dropdown,
+ * click Run) after pasting your real values into the three lines below —
+ * saves them into this project's Script Properties, which is where
+ * SHARED_SECRET / REPORT_RECIPIENTS / REMINDER_RECIPIENTS actually live
+ * from then on (see the CONFIG section up top). Safe to re-run any time
+ * you want to rotate the token or update who gets emailed — this
+ * overwrites, it doesn't append. You can also skip this function
+ * entirely and edit the same three properties directly under Project
+ * Settings > Script Properties, if you'd rather not have the values
+ * pasted into a function body at all, even briefly and un-committed.
+ *
+ * IMPORTANT: after running this, delete/blank the pasted values below
+ * again before you save/commit this file anywhere — the whole point is
+ * that these never end up in source control (this project's included).
+ */
+function setupScriptProperties() {
+  PropertiesService.getScriptProperties().setProperties({
+    SHARED_SECRET: 'PASTE-A-NEW-RANDOM-SECRET-HERE',
+    REPORT_RECIPIENTS: 'name1@example.com, name2@example.com',
+    // REMINDER_RECIPIENTS: 'only-set-this-if-it-should-differ-from-REPORT_RECIPIENTS@example.com',
+  });
+  Logger.log('Script Properties saved. Blank the values above and re-run (or just leave this function alone) from now on.');
 }
 
 /** Run manually any time you add/rename a tab or column and don't want

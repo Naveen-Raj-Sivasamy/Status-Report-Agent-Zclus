@@ -6,6 +6,18 @@ const SITES = ['MHF', 'FV', 'Peds', 'GI', 'Specialty Pharmacy', 'All'];
 const REQUESTERS = ['Cassandra', 'Tseten', 'Grant', 'Tammy', 'Naveen'];
 const ASSIGNEES = ['Naveen', 'Surya', 'Amulya', 'Cassandra', 'Tseten', 'Grant', 'Tammy', 'Lucy', 'Erika'];
 
+// Top-level menu the widget shows before the tab list — started life as
+// just "log a status update", now covers more than one kind of thing, so
+// tabs group under whichever menu they conceptually belong to instead of
+// one long flat list. A tab that shows up from the sheet but isn't listed
+// under any of these still appears — see groupTabsIntoCategories() below —
+// bucketed into an auto-created "More" menu, so a newly added tab is
+// never silently unreachable, just uncategorized until it's added here.
+const CATEGORIES = {
+  'Status Report Generator': ['Daily Status', 'Adhoc_Mails', 'Cleanup_Activities', 'Drupal_Bugs_&_Improvements'],
+  'Team Management': ['Leave'],
+};
+
 const FIELD_CONFIG = {
   'Daily Status': {
     Site: { type: 'select', options: SITES },
@@ -53,6 +65,26 @@ const FIELD_CONFIG = {
 
 function normalizeKey(s) {
   return String(s).trim().toLowerCase();
+}
+
+// Buckets the live list of sheet tabs into CATEGORIES, in CATEGORIES'
+// own order, skipping a category entirely if none of its tabs currently
+// exist (e.g. Leave got renamed). Anything left over — present on the
+// sheet but not listed under any category — lands in a "More" bucket
+// appended at the end, shown only if it's non-empty, so a brand-new tab
+// is discoverable instead of just vanishing from the widget.
+function groupTabsIntoCategories(tabs) {
+  const used = new Set();
+  const groups = Object.keys(CATEGORIES)
+    .map((name) => {
+      const members = CATEGORIES[name].filter((t) => tabs.indexOf(t) !== -1);
+      members.forEach((t) => used.add(t));
+      return { name: name, tabs: members };
+    })
+    .filter((g) => g.tabs.length > 0);
+  const leftover = tabs.filter((t) => !used.has(t));
+  if (leftover.length) groups.push({ name: 'More', tabs: leftover });
+  return groups;
 }
 
 // Matches column names case-insensitively (and ignoring stray whitespace),

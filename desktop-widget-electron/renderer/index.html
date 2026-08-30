@@ -75,6 +75,30 @@
   .tab-btn:hover { background: var(--surface-hover); }
   .tab-btn:active { transform: scale(0.98); }
 
+  /* The top-level category menu (Status Report Generator / Team
+     Management / ...) — deliberately bigger than a plain .tab-btn, not
+     just for looks: with only 1-2 options on that first screen, the
+     popup must not visibly shrink compared to every screen after it. A
+     title + a preview of what's inside earns that extra height honestly
+     instead of padding it out artificially. */
+  .category-btn {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+    width: 100%; text-align: left;
+    background: var(--surface);
+    border: none;
+    color: var(--text);
+    padding: 20px 18px;
+    border-radius: 14px;
+    margin-bottom: 11px;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    transition: background 0.12s ease, transform 0.06s ease;
+  }
+  .category-btn:hover { background: var(--surface-hover); }
+  .category-btn:active { transform: scale(0.98); }
+  .category-btn .category-title { font-size: 14.5px; font-weight: 700; }
+  .category-btn .category-sub { font-size: 11px; color: var(--text-dim); font-weight: 500; }
+
   /* Persistent bar pinned below the (scrollable) tab list — outside `main`,
      so it never shifts up/down as tabs are added or removed. margin-top is
      the deliberate visible gap between the tab list and these two CTAs
@@ -590,28 +614,87 @@
     };
   }
 
-  async function showTabPicker() {
-    els.sub.textContent = 'What are you logging status for?';
+  // Which category's tab list is currently showing, if any — so the many
+  // existing "go back to the tab list" callbacks (Cancel on a form, retry
+  // after an error, Done after a submit, Back from Settings/Report
+  // Options) can all keep calling showTabPicker() with no arguments and
+  // land back on the right list, instead of every one of those needing to
+  // be rewritten to thread the category through by hand.
+  let currentCategory = null;
+
+  // The landing screen: one big button per category (see CATEGORIES in
+  // field-config.js) instead of a single flat list of every tab — this
+  // used to be the app's only screen, back when it did one thing.
+  async function showCategoryPicker() {
+    currentCategory = null;
+    els.sub.textContent = 'What would you like to do?';
     els.footer.classList.add('hidden');
-    showLoading('Loading categories…');
+    els.reportActions.classList.add('hidden');
+    showLoading('Loading…');
     try {
       const { tabs } = await window.statusApp.getTabs();
+      const groups = groupTabsIntoCategories(tabs);
       els.main.innerHTML = '';
 
-      tabs.forEach((tab) => {
+      groups.forEach((group) => {
         const btn = document.createElement('button');
-        btn.className = 'tab-btn';
-        btn.textContent = tab;
-        btn.onclick = () => showForm(tab);
+        btn.className = 'category-btn';
+        btn.innerHTML = `
+          <span class="category-title">${escapeHtml(group.name)}</span>
+          <span class="category-sub">${escapeHtml(group.tabs.join(', '))}</span>`;
+        btn.onclick = () => showTabPicker(group);
         els.main.appendChild(btn);
       });
-
-      // The View Report / Submit Report buttons live outside `main` (see
-      // markup) so they stay pinned at the very bottom of the card no
-      // matter how many tabs get added later — they never move.
-      els.reportActions.classList.remove('hidden');
     } catch (err) {
-      showError(err.message || String(err), showTabPicker);
+      showError(err.message || String(err), showCategoryPicker);
+    }
+  }
+
+  // Renders one category's tab list. `group` is only ever a real
+  // {name, tabs} object when called from showCategoryPicker's own click
+  // handler above (an arrow function, so it passes the real value) —
+  // every other call site assigns this function straight to an
+  // `onclick`/`onDone`, which invokes it with the DOM event as the first
+  // argument instead. The typeof/Array.isArray check below is what tells
+  // those apart, so a bare `showTabPicker()` (or `showTabPicker(event)`)
+  // safely falls back to whichever category was already showing.
+  function showTabPicker(group) {
+    if (group && typeof group === 'object' && Array.isArray(group.tabs)) {
+      currentCategory = group;
+    }
+    group = currentCategory;
+    if (!group) return showCategoryPicker(); // nothing to go "back" to — land on the real start screen instead
+
+    els.sub.textContent = group.name === 'Status Report Generator'
+      ? 'What are you logging status for?'
+      : `${group.name} — choose an option`;
+    els.footer.classList.add('hidden');
+    els.main.innerHTML = '';
+
+    group.tabs.forEach((tab) => {
+      const btn = document.createElement('button');
+      btn.className = 'tab-btn';
+      btn.textContent = tab;
+      btn.onclick = () => showForm(tab);
+      els.main.appendChild(btn);
+    });
+
+    const backBtn = document.createElement('button');
+    backBtn.className = 'secondary';
+    backBtn.style.cssText = 'width:100%; margin-top:2px;';
+    backBtn.textContent = '← Back';
+    backBtn.onclick = showCategoryPicker;
+    els.main.appendChild(backBtn);
+
+    // View Report / Submit Report only make sense for the Status Report
+    // Generator category — REPORT_TABS (the server side of this) is
+    // scoped to exactly those tabs, so offering "Submit Report" from
+    // Team Management would compile a report that never includes
+    // anything Team Management actually logged.
+    if (group.name === 'Status Report Generator') {
+      els.reportActions.classList.remove('hidden');
+    } else {
+      els.reportActions.classList.add('hidden');
     }
   }
 
@@ -829,12 +912,12 @@
 
   window.statusApp.onOpened(async () => {
     yourName = await window.statusApp.getYourName();
-    showTabPicker();
+    showCategoryPicker(); // a fresh open always starts at the top, not wherever it was left last time
   });
 
   window.statusApp.getYourName().then((n) => (yourName = n));
   checkAppVersion();
-  showTabPicker();
+  showCategoryPicker();
 
   // Keep the actual OS window sized to whatever's on screen right now,
   // instead of a fixed height that leaves dead space for a short screen

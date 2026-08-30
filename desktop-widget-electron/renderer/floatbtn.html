@@ -16,16 +16,17 @@
     -webkit-app-region: drag;
   }
   /* Inner: the click target — your icon exactly as uploaded, no background/border.
-     Deliberately left as a `drag` region (same as #btn, not `no-drag`): a
-     plain click still fires normally as long as the mouse doesn't move, so
-     clicking still opens the popup — but now grabbing the icon itself (not
-     just the thin rim around it) also drags the window, which is what
-     people naturally try first. */
+     `no-drag`, not `drag`: on Windows, Electron's native app-region drag
+     does NOT reliably let a plain click through underneath it — it was
+     tried (`drag` here, matching #btn) as the "simple" fix for dragging by
+     the icon, but that ended up swallowing single clicks entirely instead.
+     Dragging-by-the-icon is implemented by hand below instead, entirely in
+     JS via mousedown/mousemove + moveFloatBtnBy — see the script. */
   #hit {
     width: 55px; height: 55px; /* 46 +20% — was reading smaller than other desktop icons */
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
-    -webkit-app-region: drag;
+    -webkit-app-region: no-drag;
   }
   #hit img {
     width: 100%; height: 100%; object-fit: contain;
@@ -41,7 +42,41 @@
   </div>
 <script>
   const hit = document.getElementById('hit');
-  hit.addEventListener('click', () => window.statusApp.fabClicked());
+
+  // Manual click-vs-drag: #hit is `no-drag` (see CSS) so it always gets a
+  // real, reliable click event — then we tell drag apart from click
+  // ourselves by watching whether the mouse actually moved before it came
+  // back up, instead of leaning on Electron's native app-region drag
+  // (which was the earlier, broken attempt at this).
+  const DRAG_THRESHOLD_PX = 4; // small moves while clicking shouldn't count as a drag
+  let dragOrigin = null; // {x, y} in screen coords, set on mousedown, cleared on mouseup
+  let didDrag = false;   // read (and reset) by the click handler right after mouseup
+
+  hit.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return; // left button only
+    dragOrigin = { x: e.screenX, y: e.screenY };
+    didDrag = false;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!dragOrigin) return;
+    const dx = e.screenX - dragOrigin.x;
+    const dy = e.screenY - dragOrigin.y;
+    if (!didDrag && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    didDrag = true;
+    window.statusApp.moveFloatBtnBy(dx, dy);
+    dragOrigin = { x: e.screenX, y: e.screenY }; // deltas from here on, not from the original point
+  });
+
+  window.addEventListener('mouseup', () => {
+    dragOrigin = null; // didDrag is left as-is on purpose — the click handler below still needs it
+  });
+
+  hit.addEventListener('click', () => {
+    if (didDrag) { didDrag = false; return; } // this click is just the tail end of a drag — ignore it
+    window.statusApp.fabClicked();
+  });
+
   hit.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     window.statusApp.showFabMenu();

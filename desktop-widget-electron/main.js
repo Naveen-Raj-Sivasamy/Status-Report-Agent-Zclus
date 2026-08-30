@@ -241,6 +241,18 @@ ipcMain.on('resize-window', (_e, height) => {
     positionPopupNearWindow(refBounds);
   }
 });
+// Manual drag for the floating icon (see floatbtn.html) — the renderer
+// tracks the mouse itself and sends screen-pixel deltas here rather than
+// us relying on -webkit-app-region: drag on the icon, which on Windows
+// ended up swallowing plain clicks along with actual drags. setPosition
+// still fires the window's own 'moved' event same as a native OS drag
+// would, so the existing debounced position-save in createFloatButton
+// keeps working unchanged.
+ipcMain.on('float-btn-move-by', (_e, { dx, dy }) => {
+  if (!floatBtn) return;
+  const [x, y] = floatBtn.getPosition();
+  floatBtn.setPosition(Math.round(x + dx), Math.round(y + dy));
+});
 ipcMain.handle('open-sheet', () => {
   if (config.SHEET_URL) shell.openExternal(config.SHEET_URL);
 });

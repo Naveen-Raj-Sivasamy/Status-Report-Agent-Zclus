@@ -26,21 +26,31 @@ function loadSharedConfig() {
   );
 }
 
-function loadSavedName() {
+// Both YOUR_NAME and the openAtLogin preference below live in this same
+// per-person file — read-modify-write through these two helpers so saving
+// one never clobbers the other.
+function loadUserConfig() {
   try {
-    const saved = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, 'utf8'));
-    return saved.YOUR_NAME || '';
+    return JSON.parse(fs.readFileSync(USER_CONFIG_PATH, 'utf8'));
   } catch {
-    return '';
+    return {};
   }
 }
 
-function saveYourNameToDisk(name) {
+function saveUserConfig(patch) {
   try {
-    fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify({ YOUR_NAME: name }));
+    fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(Object.assign(loadUserConfig(), patch)));
   } catch {
     /* best-effort */
   }
+}
+
+function loadSavedName() {
+  return loadUserConfig().YOUR_NAME || '';
+}
+
+function saveYourNameToDisk(name) {
+  saveUserConfig({ YOUR_NAME: name });
 }
 
 let config;
@@ -258,12 +268,7 @@ ipcMain.handle('open-sheet', () => {
 });
 ipcMain.handle('fab-clicked', () => toggleWindow());
 ipcMain.handle('show-fab-menu', () => {
-  Menu.buildFromTemplate([
-    { label: 'Submit status update', click: toggleWindow },
-    { label: 'Open sheet', click: () => config.SHEET_URL && shell.openExternal(config.SHEET_URL) },
-    { type: 'separator' },
-    { label: 'Quit', click: () => app.quit() },
-  ]).popup({ window: floatBtn });
+  Menu.buildFromTemplate(buildAppMenuTemplate()).popup({ window: floatBtn });
 });
 ipcMain.handle('save-your-name', (_e, name) => {
   config.YOUR_NAME = name;
@@ -432,8 +437,51 @@ function createFloatButton() {
   return win;
 }
 
+// Defaults to on (most people opening this widget at all want it running
+// every login, same as any tray app) but is a one-time default, not an
+// enforced setting — read from the per-person profile, which the tray
+// menu's checkbox toggle below writes to, so someone who explicitly turns
+// it off stays off across restarts instead of being reset back to on.
+function applyLoginItemSetting() {
+  const saved = loadUserConfig();
+  const openAtLogin = typeof saved.openAtLogin === 'boolean' ? saved.openAtLogin : true;
+  if (typeof saved.openAtLogin !== 'boolean') saveUserConfig({ openAtLogin });
+  app.setLoginItemSettings({ openAtLogin });
+}
+
+function toggleLoginItemSetting() {
+  const openAtLogin = !app.getLoginItemSettings().openAtLogin;
+  app.setLoginItemSettings({ openAtLogin });
+  saveUserConfig({ openAtLogin });
+  rebuildTrayMenu();
+}
+
+// Shared by the tray's own right-click menu and the floating icon's
+// right-click menu (see the show-fab-menu handler below) — one definition
+// so the two never drift apart.
+function buildAppMenuTemplate() {
+  return [
+    { label: 'Submit status update', click: toggleWindow },
+    { label: 'Open sheet', click: () => config.SHEET_URL && shell.openExternal(config.SHEET_URL) },
+    { type: 'separator' },
+    {
+      label: 'Start with Windows',
+      type: 'checkbox',
+      checked: app.getLoginItemSettings().openAtLogin,
+      click: toggleLoginItemSetting,
+    },
+    { type: 'separator' },
+    { label: 'Quit', click: () => app.quit() },
+  ];
+}
+
+function rebuildTrayMenu() {
+  tray.setContextMenu(Menu.buildFromTemplate(buildAppMenuTemplate()));
+}
+
 function startMainApp() {
   if (app.dock) app.dock.hide(); // tray/floating-button app, no dock icon needed
+  applyLoginItemSetting();
 
   // Windows always fits this to its own fixed notification-area slot
   // regardless of the source size we pass in — so a bigger source doesn't
@@ -445,14 +493,7 @@ function startMainApp() {
   tray = new Tray(trayImg.resize({ width: 32, height: 32 }));
   tray.setToolTip('Status Report Generator');
   tray.on('click', toggleWindow);
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: 'Submit status update', click: toggleWindow },
-      { label: 'Open sheet', click: () => config.SHEET_URL && shell.openExternal(config.SHEET_URL) },
-      { type: 'separator' },
-      { label: 'Quit', click: () => app.quit() },
-    ])
-  );
+  rebuildTrayMenu();
 
   popup = createPopup();
   floatBtn = createFloatButton();

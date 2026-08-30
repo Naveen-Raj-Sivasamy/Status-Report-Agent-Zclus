@@ -15,13 +15,25 @@
  *    clearCache() manually after adding/renaming a tab or column if you
  *    want the change to show up immediately instead of waiting it out.
  * 2. Two time-driven jobs you wire up once via setupTriggers():
- *      sendFridayReminder()      -> 6pm Friday, nudges the team
- *      compileAndSendReport()    -> ~11pm Friday, emails THIS WEEK'S rows
- *                                    only (Mon-Fri), as a .xlsx, to RECIPIENTS
+ *      sendFridayReminder()              -> 6pm Friday, nudges the team
+ *      scheduledCompileAndSendReport()   -> ~11pm Friday, emails THIS WEEK'S
+ *                                    rows only (Mon-Fri), as a .xlsx, to
+ *                                    RECIPIENTS. Thin wrapper around
+ *                                    compileAndSendReport() — see below.
+ *    Both are skipped automatically on any date listed in the optional
+ *    _Holidays tab (see HOLIDAYS_TAB_NAME) — a manual send always goes
+ *    through compileAndSendReport() directly and ignores holidays.
  *
  * Each sheet tab's row 1 must be column headers. Any tab whose name
  * starts with "_" is treated as config/internal and hidden from the
  * widget (handy for a "_Team" tab listing reminder recipients, etc).
+ *
+ * A "Leave" tab is created automatically (see ensureLeaveTab()) the first
+ * time the widget asks for the tab list, so people can log their own
+ * leave/holiday/WFH days out of the box. New tabs — Leave included — show
+ * up in the widget automatically too, but the compiled weekly report only
+ * ever pulls from REPORT_TABS below; add a tab's name there yourself if
+ * you want it folded into the report as well.
  */
 
 // ============================= CONFIG =====================================
@@ -67,6 +79,14 @@ var REPORT_DATE_COLUMN = 'Date';
 // as a "log an entry" choice.
 var HIDDEN_TABS = ['Weekly_Monthly_Summary'];
 
+// Tabs actually pulled into the compiled weekly report (email + download)
+// — an explicit allowlist, deliberately NOT "whatever tabs happen to be
+// visible in the widget right now". New tabs (Leave, or anything else you
+// or the team add later) show up in the widget just fine without being
+// added here — they just don't show up IN the report unless you
+// explicitly opt them in by adding their name to this list.
+var REPORT_TABS = ['Daily Status', 'Adhoc_Mails', 'Cleanup_Activities', 'Drupal_Bugs_&_Improvements'];
+
 // How long tabs/columns responses are cached (seconds). Higher = faster
 // widget, but slower to notice a newly added tab/column. Run clearCache()
 // after such a change if you don't want to wait this out.
@@ -78,6 +98,17 @@ var CACHE_SECONDS = 300;
 // main.js) so a busy backend fails fast and visibly rather than looking
 // like a permanent hang.
 var LOCK_WAIT_MS = 10000;
+
+// Optional tab listing full-team holidays, one date per row under a
+// "Date" column (same header convention as every other tab). When today
+// is listed here, the SCHEDULED Friday reminder and report-send are
+// skipped — no point nagging people, or mailing out a near-empty report,
+// on a day nobody's expected to be working. Doesn't affect a manual
+// on-demand send (the widget's "Submit Report", or the API's
+// sendReportNow) — those still always send when a person actually asks
+// for them. Starts with "_" so it's already hidden from the widget's tab
+// list like _Config, with zero setup needed beyond creating the tab.
+var HOLIDAYS_TAB_NAME = '_Holidays';
 
 // =============================== API ======================================
 
@@ -247,7 +278,7 @@ function setupTriggers() {
     .atHour(18) // 6pm, script timezone (see appsscript.json -> Asia/Kolkata)
     .create();
 
-  ScriptApp.newTrigger('compileAndSendReport')
+  ScriptApp.newTrigger('scheduledCompileAndSendReport')
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.FRIDAY)
     .atHour(23) // 11pm
@@ -257,8 +288,47 @@ function setupTriggers() {
   Logger.log('Triggers installed: Friday 6pm reminder, Friday 11pm report.');
 }
 
+/** Rows under HOLIDAYS_TAB_NAME, if that tab exists, are compared against
+ * `date` (calendar day only, script timezone — same rule REPORT_DATE_COLUMN
+ * filtering already uses elsewhere). Returns false, quietly, if the tab
+ * doesn't exist yet — holidays are opt-in, not a hard requirement. */
+function isHoliday(date) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(HOLIDAYS_TAB_NAME);
+  if (!sheet) return false;
+  var headers = getHeaderRow(sheet);
+  var dateIndex = findColumnIndex(headers, REPORT_DATE_COLUMN);
+  if (dateIndex === -1) return false;
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return false;
+
+  var tz = Session.getScriptTimeZone();
+  var target = Utilities.formatDate(date, tz, 'yyyy-MM-dd');
+  var values = sheet.getRange(2, dateIndex + 1, lastRow - 1, 1).getValues();
+  return values.some(function (row) {
+    var raw = row[0];
+    var d = raw instanceof Date ? raw : new Date(raw);
+    return !isNaN(d.getTime()) && Utilities.formatDate(d, tz, 'yyyy-MM-dd') === target;
+  });
+}
+
+/** What the Friday 11pm trigger actually calls — skips entirely on a
+ * listed holiday. A manual send (widget's "Submit Report", or the API's
+ * sendReportNow action) goes straight to compileAndSendReport() below and
+ * is never skipped this way, since a person explicitly asked for it. */
+function scheduledCompileAndSendReport() {
+  if (isHoliday(new Date())) {
+    Logger.log('Skipping scheduled report — today is listed in ' + HOLIDAYS_TAB_NAME + '.');
+    return;
+  }
+  compileAndSendReport();
+}
+
 /** Friday 6pm nudge to fill in the status sheet before the 10pm cutoff. */
 function sendFridayReminder() {
+  if (isHoliday(new Date())) {
+    Logger.log('Skipping Friday reminder — today is listed in ' + HOLIDAYS_TAB_NAME + '.');
+    return;
+  }
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var subject = 'Reminder: submit your status update by 10pm tonight';
   var body =
@@ -294,7 +364,10 @@ function buildReportBlob(range) {
   var tempName = ss.getName() + ' — ' + formatRangeLabel(range);
 
   var temp = SpreadsheetApp.create(tempName);
-  var tabNames = listVisibleTabsUncached();
+  // REPORT_TABS, not listVisibleTabsUncached() — the report is scoped to
+  // an explicit list of real tabs, not "whatever's visible in the widget
+  // right now" (filtered defensively in case one's been renamed/removed).
+  var tabNames = REPORT_TABS.filter(function (name) { return !!getSheetByName(name); });
 
   tabNames.forEach(function (tabName, i) {
     var source = getSheetByName(tabName);
@@ -400,12 +473,33 @@ function cached(key, computeFn) {
 }
 
 function listVisibleTabsUncached() {
+  ensureLeaveTab();
   return SpreadsheetApp.getActiveSpreadsheet()
     .getSheets()
     .map(function (s) { return s.getName(); })
     .filter(function (name) {
       return name.indexOf('_') !== 0 && HIDDEN_TABS.indexOf(name) === -1;
     });
+}
+
+// Name of the auto-created "Leave" tab — a normal, visible tab (unlike
+// _Config/_Holidays) so it shows up in the widget's tab list like any
+// other "log an entry" category, letting people log their own leave/
+// holiday/WFH days without you having to set the tab up by hand first.
+// Deliberately not in REPORT_TABS: it's the same shape of data as
+// everything else, it just isn't part of the weekly work report.
+var LEAVE_TAB_NAME = 'Leave';
+
+/** Created once, the first time anything asks for the tab list, if it
+ * doesn't already exist — same self-creating pattern as _Config. A no-op
+ * every time after that (cheap existence check), and never touches the
+ * tab again once it's there, so renaming columns or adding your own is
+ * completely safe. */
+function ensureLeaveTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(LEAVE_TAB_NAME)) return;
+  var sheet = ss.insertSheet(LEAVE_TAB_NAME);
+  sheet.getRange(1, 1, 1, 5).setValues([['Name', 'Date', 'Type', 'Reason', 'Week']]);
 }
 
 function listVisibleTabs() {

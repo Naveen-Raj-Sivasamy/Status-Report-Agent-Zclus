@@ -38,6 +38,17 @@ const FIELD_CONFIG = {
     Type: { type: 'select', options: ['Bug', 'Fix', 'Suggestion'] },
     'Assigned to': { type: 'multiselect', options: ASSIGNEES },
   },
+  // Auto-created server-side (see ensureLeaveTab() in Code.gs) the first
+  // time the widget asks for the tab list — this config just makes that
+  // tab's form as polished as the rest instead of falling back to plain
+  // text boxes for every field. One person per leave entry, so a plain
+  // `select` (not `multiselect` like "Assigned to" elsewhere) fits better.
+  Leave: {
+    Name: { type: 'select', options: ASSIGNEES },
+    Date: { type: 'date' },
+    Week: { type: 'week-auto', basedOn: 'Date' },
+    Type: { type: 'select', options: ['Vacation', 'Sick', 'WFH', 'Holiday', 'Other'] },
+  },
 };
 
 function normalizeKey(s) {

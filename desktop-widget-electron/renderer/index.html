@@ -270,6 +270,52 @@
     }
   });
 
+  // -------------------- draft auto-save --------------------
+  // Typing something into a form and then closing the popup (or Windows
+  // updating, or the app just crashing) used to lose it outright. Cache
+  // each tab's in-progress values as you type, restore them next time that
+  // tab's form opens, and clear the cache once a submission actually
+  // succeeds. localStorage here is scoped to this renderer and survives
+  // closing/reopening the popup — it's only ever cleared explicitly below.
+  const DRAFT_PREFIX = 'draft:';
+
+  function saveDraft(tab, values) {
+    try {
+      const nonEmpty = Object.fromEntries(Object.entries(values).filter(([, v]) => v));
+      if (Object.keys(nonEmpty).length) {
+        localStorage.setItem(DRAFT_PREFIX + tab, JSON.stringify(nonEmpty));
+      } else {
+        localStorage.removeItem(DRAFT_PREFIX + tab); // nothing worth keeping
+      }
+    } catch {
+      /* best-effort — a locked-down profile shouldn't break the form over this */
+    }
+  }
+
+  function loadDraft(tab) {
+    try {
+      return JSON.parse(localStorage.getItem(DRAFT_PREFIX + tab) || 'null') || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function clearDraft(tab) {
+    try {
+      localStorage.removeItem(DRAFT_PREFIX + tab);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  function debounce(fn, ms) {
+    let t = null;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), ms);
+    };
+  }
+
   function showLoading(msg) {
     els.footer.classList.add('hidden');
     els.reportActions.classList.add('hidden');
@@ -531,7 +577,7 @@
     }
   }
 
-  function buildFieldInput(tab, col) {
+  function buildFieldInput(tab, col, presetValue) {
     const spec = (typeof fieldSpecFor === 'function' && fieldSpecFor(tab, col)) || null;
 
     if (spec && spec.type === 'select') {
@@ -544,18 +590,23 @@
         o.value = opt; o.textContent = opt;
         select.appendChild(o);
       });
+      if (presetValue) select.value = presetValue;
       return select;
     }
 
     if (spec && spec.type === 'multiselect') {
       const group = document.createElement('div');
       group.className = 'chip-group';
-      const selected = new Set();
+      const preselected = presetValue
+        ? presetValue.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+      const selected = new Set(preselected);
       spec.options.forEach((opt) => {
         const chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'chip';
         chip.textContent = opt;
+        if (selected.has(opt)) chip.classList.add('selected');
         chip.onclick = () => {
           if (selected.has(opt)) { selected.delete(opt); chip.classList.remove('selected'); }
           else { selected.add(opt); chip.classList.add('selected'); }
@@ -572,6 +623,7 @@
     if (spec && spec.type === 'date') {
       const input = document.createElement('input');
       input.type = 'date';
+      if (presetValue) input.value = presetValue;
       return input;
     }
 
@@ -594,7 +646,8 @@
     const isLong = /notes|description|blocker|comment|detail/i.test(col);
     const input = document.createElement(isLong ? 'textarea' : 'input');
     if (isLong) input.rows = 2;
-    if (/name/i.test(col) && yourName) input.value = yourName;
+    if (presetValue) input.value = presetValue;
+    else if (/name/i.test(col) && yourName) input.value = yourName;
     return input;
   }
 
@@ -605,17 +658,34 @@
       const { columns } = await window.statusApp.getColumns(tab);
       els.main.innerHTML = '';
       const inputs = {};
+      const draft = loadDraft(tab);
 
       columns.forEach((col) => {
         const wrap = document.createElement('div');
         wrap.className = 'field';
         const label = document.createElement('label');
         label.textContent = col;
-        const input = buildFieldInput(tab, col);
+        const input = buildFieldInput(tab, col, draft[col]);
         wrap.appendChild(label);
         wrap.appendChild(input);
         els.main.appendChild(wrap);
         inputs[col] = input;
+      });
+
+      // Keep the draft updated as they type/pick/toggle anything — 'input'
+      // covers text/textarea/date, 'change' covers <select>, and 'click'
+      // (bubbling up from a chip) covers multiselect chip-groups; readonly
+      // fields (week-auto, sequence) are recomputed fresh every time this
+      // form opens anyway, so there's nothing useful to persist for those.
+      const scheduleDraftSave = debounce(() => {
+        const values = {};
+        Object.entries(inputs).forEach(([k, el]) => (values[k] = (el.value || '').trim()));
+        saveDraft(tab, values);
+      }, 400);
+      Object.entries(inputs).forEach(([, el]) => {
+        if (el.readOnly) return;
+        const evt = el.tagName === 'SELECT' ? 'change' : el.classList.contains('chip-group') ? 'click' : 'input';
+        el.addEventListener(evt, scheduleDraftSave);
       });
 
       // Wire up Date -> Week auto-fill for whichever columns are configured that way.
@@ -662,6 +732,7 @@
         Object.entries(inputs).forEach(([k, el]) => (values[k] = (el.value || '').trim()));
         try {
           await window.statusApp.submitEntry(tab, values);
+          clearDraft(tab); // it actually made it to the sheet — nothing left to restore next time
           showSuccess(tab);
         } catch (err) {
           els.submitBtn.disabled = false;

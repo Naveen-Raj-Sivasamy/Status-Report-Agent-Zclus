@@ -1,19 +1,32 @@
 name: Build and Release Installer
 
-# Builds the Windows installer on a clean Windows runner and publishes it
-# as a GitHub Release asset named StatusUpdate-Setup.exe. Because that
-# filename never changes between releases, this permanent link always
-# points at the newest build:
+# Builds the Windows installer AND the (unsigned) Mac disk image, on their
+# respective native runners, and publishes both as GitHub Release assets:
+#   StatusUpdate-Setup.exe
+#   StatusUpdate-Setup.dmg
+# Neither filename changes between releases, so these permanent links
+# always point at the newest build of each:
 #   https://github.com/<owner>/<repo>/releases/latest/download/StatusUpdate-Setup.exe
-# That link is what's stored in the Google Sheet's _Config tab as
+#   https://github.com/<owner>/<repo>/releases/latest/download/StatusUpdate-Setup.dmg
+# The .exe link is what's stored in the Google Sheet's _Config tab as
 # DownloadUrl (set once, never needs updating again).
+#
+# The Mac build is unsigned (no Apple Developer account in this project) —
+# `"identity": null` in package.json tells electron-builder not to even
+# attempt it. That means Gatekeeper will flag it as from an "unidentified
+# developer": teammates need to right-click the app -> Open the first time
+# (or System Settings -> Privacy & Security -> "Open Anyway") instead of
+# just double-clicking. Real code signing needs a paid Apple Developer
+# account, which is a call for whoever owns this project to make.
 #
 # Triggered by a "v*.*.*" tag push — which you never have to do by hand:
 # auto-tag-release.yml pushes that tag itself the moment a version bump in
 # desktop-widget-electron/package.json lands on main. So shipping a new
 # version is just "bump the version, commit, push"; this workflow then
-# builds, releases, and tells the running app about the new version
-# automatically (via the setLatestVersion action in Code.gs).
+# builds both installers, releases them, and tells the running app about
+# the new version automatically (via the setLatestVersion action in
+# Code.gs) — once, not once per platform, since it's the same version
+# either way.
 #
 # One-time setup required (see README.md "Continuous deployment" section):
 #   Add a repo secret named CONFIG_TEMPLATE_JSON containing the exact JSON
@@ -30,7 +43,18 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false # a Mac build hiccup shouldn't block the Windows release, or vice versa
+      max-parallel: 1 # both legs upload to the SAME GitHub Release — run sequentially, not racing each other creating/updating it
+      matrix:
+        include:
+          - os: windows-latest
+            build-script: build:win
+            artifact: StatusUpdate-Setup.exe
+          - os: macos-latest
+            build-script: build:mac
+            artifact: StatusUpdate-Setup.dmg
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: desktop-widget-electron
@@ -55,17 +79,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Windows installer
-        run: npm run build:win
+      - name: Build installer
+        run: npm run ${{ matrix.build-script }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: desktop-widget-electron/dist/StatusUpdate-Setup.exe
+          files: desktop-widget-electron/dist/${{ matrix.artifact }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
 
       - name: Tell the app about the new version
+        if: matrix.os == 'windows-latest' # same version either way — only need to say it once
         shell: bash
         run: |
           WEBHOOK_URL=$(node -pe "require('./config.template.json').WEBHOOK_URL")

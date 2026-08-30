@@ -67,14 +67,14 @@ most tenants for this (unlike a full Azure app registration).
 
 ## 3. Configure and run the desktop widget
 
-There are two widgets in this repo — pick one:
+The widget lives in `desktop-widget-electron/` — a floating tray icon
+with a custom popup UI. Needs [Node.js](https://nodejs.org) 18+.
 
-- **`desktop-widget-electron/`** (recommended) — modern custom UI, true
-  floating tray icon. Needs Node.js.
-- **`desktop-widget/`** — plain Python/Tkinter version, works but looks
-  basic. Simpler prerequisites if Node.js isn't an option.
-
-### Electron version (recommended)
+(There used to be a second, plain Python/Tkinter widget in
+`desktop-widget/` as a no-Node.js fallback. It was removed — it hadn't
+been touched since this repo's very first commit, before essentially
+every feature below existed, so it was just a trap for anyone who
+happened to install the wrong, badly outdated one.)
 
 ```
 cd desktop-widget-electron
@@ -103,20 +103,6 @@ your form.
 `config.json` here is for **your own dev/testing runs only** — it's
 gitignored and never shipped. The installer built in the next section
 does not use it at all.
-
-### Python/Tkinter version (fallback)
-
-```
-cd desktop-widget
-cp config.example.json config.json
-```
-
-Same `config.json` fields as above. Run it directly (needs Python 3.9+):
-
-```
-pip install -r requirements.txt
-python status_widget.py
-```
 
 ## 4. Package it for teammates — one file, zero setup
 
@@ -168,10 +154,13 @@ it installs to their own user profile (no admin rights needed), adds a
 Start Menu + Desktop shortcut, launches automatically, asks for their
 name once, and they're in.
 
-**Mac**: same idea — `npm run build:mac` → `dist/StatusUpdate-*.dmg`.
+**Mac**: same idea — `npm run build:mac` → `dist/StatusUpdate-Setup.dmg`.
 Mac doesn't support a fully silent one-click install the way Windows NSIS
 does; teammates drag the app into Applications as usual, but still get
-the same first-run name prompt and shared `config.template.json`.
+the same first-run name prompt and shared `config.template.json`. (You
+don't actually need to run this by hand — see the CI/CD section below,
+which builds and releases both platforms automatically on every version
+bump.)
 
 This build is unsigned (no paid code-signing certificate), so:
 - **Windows**: SmartScreen may warn on first run — "More info" → "Run anyway".
@@ -204,16 +193,24 @@ that tag push is what actually triggers a release, so you no longer touch
 
 **`.github/workflows/build-release.yml`** — runs whenever a `v*.*.*` tag is
 pushed (now done automatically by the workflow above). It builds the
-Windows installer on a clean `windows-latest` runner, publishes it as a
-GitHub Release asset named `StatusUpdate-Setup.exe`, and calls the Apps
-Script web app's `setLatestVersion` action so the `_Config` tab's
-`LatestVersion` updates itself. The release asset filename never changes
-between releases, so this link always points at the newest build and is
-what's stored as `DownloadUrl` (set once, permanently):
+Windows installer AND the Mac disk image, on their respective native
+runners (`windows-latest` / `macos-latest`, one after the other, not in
+parallel — both upload to the same release), and publishes them as
+GitHub Release assets named `StatusUpdate-Setup.exe` and
+`StatusUpdate-Setup.dmg`. It also calls the Apps Script web app's
+`setLatestVersion` action once (not once per platform) so the `_Config`
+tab's `LatestVersion` updates itself. Neither release asset's filename
+changes between releases, so these links always point at the newest
+build of each and the `.exe` one is what's stored as `DownloadUrl` (set
+once, permanently):
 
 ```
 https://github.com/<owner>/<repo>/releases/latest/download/StatusUpdate-Setup.exe
+https://github.com/<owner>/<repo>/releases/latest/download/StatusUpdate-Setup.dmg
 ```
+
+The Mac build is unsigned (no Apple Developer account here), so it needs
+the same right-click-to-open workaround described above.
 
 **One-time setup** (only needed once, by whoever owns this repo):
 

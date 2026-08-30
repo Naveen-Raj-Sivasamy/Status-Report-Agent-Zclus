@@ -290,6 +290,14 @@
   };
 
   let yourName = '';
+  // Dropdown/multiselect option lists from the _Options sheet tab, fetched
+  // once at launch (see the bottom of this file) and re-fetched after
+  // Settings -> "Refresh tabs & fields". buildFieldInput() resolves each
+  // field's optionsKey against this via resolveOptions() (field-config.js),
+  // which itself falls back to DEFAULT_OPTIONS per-key — so a field just
+  // renders with its shipped defaults until this has actually loaded, or
+  // for any key the sheet doesn't define, rather than rendering empty.
+  let liveOptions = {};
 
   // A save that needed a retry used to just sit there saying "Saving..."
   // for up to ~4.5 minutes with zero feedback, which looked identically
@@ -607,6 +615,7 @@
       showLoading('Clearing cache…');
       try {
         await window.statusApp.clearCache();
+        refreshLiveOptions(); // also picks up any _Options edits, not just tabs/columns
         showResult({
           success: true,
           title: 'Cache Cleared',
@@ -724,7 +733,7 @@
       const blank = document.createElement('option');
       blank.value = ''; blank.textContent = '— choose —';
       select.appendChild(blank);
-      spec.options.forEach((opt) => {
+      resolveOptions(spec.optionsKey, liveOptions).forEach((opt) => {
         const o = document.createElement('option');
         o.value = opt; o.textContent = opt;
         select.appendChild(o);
@@ -740,7 +749,7 @@
         ? presetValue.split(',').map((s) => s.trim()).filter(Boolean)
         : [];
       const selected = new Set(preselected);
-      spec.options.forEach((opt) => {
+      resolveOptions(spec.optionsKey, liveOptions).forEach((opt) => {
         const chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'chip';
@@ -928,12 +937,25 @@
     }
   }
 
+  // Fire-and-forget, same as getYourName below — main.js already caches
+  // this in memory (stale-while-revalidate), so calling it again on every
+  // open is cheap and keeps liveOptions from ever going stale for long.
+  function refreshLiveOptions() {
+    window.statusApp.getOptions().then((res) => {
+      liveOptions = (res && res.options) || {};
+    }).catch(() => {
+      /* best-effort — resolveOptions() falls back to DEFAULT_OPTIONS regardless */
+    });
+  }
+
   window.statusApp.onOpened(async () => {
     yourName = await window.statusApp.getYourName();
+    refreshLiveOptions();
     showCategoryPicker(); // a fresh open always starts at the top, not wherever it was left last time
   });
 
   window.statusApp.getYourName().then((n) => (yourName = n));
+  refreshLiveOptions();
   checkAppVersion();
   showCategoryPicker();
 

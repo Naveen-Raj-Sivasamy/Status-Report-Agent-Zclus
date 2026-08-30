@@ -138,6 +138,7 @@ async function apiPost(tab, values, opts) {
 // is cheap even when it does need to hit the network.
 let tabsCache = null;
 let columnsCache = {}; // tab -> columns[]
+let optionsCache = null; // dropdown/multiselect option lists from the _Options tab
 
 async function refreshTabsCache() {
   try {
@@ -161,12 +162,26 @@ async function refreshColumnsCache(tab) {
   }
 }
 
+async function refreshOptionsCache() {
+  try {
+    const data = await apiGet({ action: 'options' });
+    optionsCache = data;
+    return data;
+  } catch (err) {
+    if (optionsCache) return optionsCache; // stale is better than nothing
+    throw err;
+  }
+}
+
 function prefetchAll() {
   refreshTabsCache()
     .then((data) => Promise.all((data.tabs || []).map((t) => refreshColumnsCache(t))))
     .catch(() => {
       /* best-effort — a real request will retry when the user actually opens the form */
     });
+  refreshOptionsCache().catch(() => {
+    /* same — a real request will retry when a form actually needs it */
+  });
 }
 
 ipcMain.handle('get-tabs', async () => {
@@ -182,6 +197,13 @@ ipcMain.handle('get-columns', async (_e, tab) => {
     return columnsCache[tab];
   }
   return refreshColumnsCache(tab);
+});
+ipcMain.handle('get-options', async () => {
+  if (optionsCache) {
+    refreshOptionsCache();
+    return optionsCache;
+  }
+  return refreshOptionsCache();
 });
 ipcMain.handle('submit-entry', async (event, { tab, values }) => {
   const result = await apiPost(tab, values, {
@@ -208,6 +230,7 @@ ipcMain.handle('clear-cache', async () => {
   // fresh instead of quietly serving stale data for the rest of this run.
   tabsCache = null;
   columnsCache = {};
+  optionsCache = null;
   return result;
 });
 ipcMain.handle('download-report', async (_e, range) => {

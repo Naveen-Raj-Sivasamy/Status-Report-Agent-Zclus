@@ -163,6 +163,13 @@ function doGet(e) {
         downloadUrl: getConfigValue('DownloadUrl'),
       });
     }
+    /** Every dropdown/multiselect's option list, read from the _Options
+     * tab (see ensureOptionsTab()) — lets you add/remove/reorder choices
+     * by editing that tab directly instead of needing a code change and a
+     * redeploy for every tweak. */
+    if (action === 'options') {
+      return jsonOut({ ok: true, options: cached('options', getOptionsMap) });
+    }
     return jsonOut({ ok: true, message: 'Status Report Tracker Agent API is running.' });
   } catch (err) {
     return jsonOut({ ok: false, error: String(err) });
@@ -316,7 +323,7 @@ function setupScriptProperties() {
  * to wait out CACHE_SECONDS for the widget to notice. */
 function clearCache() {
   CacheService.getScriptCache().removeAll(
-    listVisibleTabsUncached().map(function (t) { return 'columns:' + t; }).concat(['tabs'])
+    listVisibleTabsUncached().map(function (t) { return 'columns:' + t; }).concat(['tabs', 'options'])
   );
   Logger.log('Cache cleared.');
 }
@@ -543,6 +550,7 @@ function cached(key, computeFn) {
 
 function listVisibleTabsUncached() {
   ensureLeaveTab();
+  ensureOptionsTab();
   return SpreadsheetApp.getActiveSpreadsheet()
     .getSheets()
     .map(function (s) { return s.getName(); })
@@ -573,6 +581,78 @@ function ensureLeaveTab() {
 
 function listVisibleTabs() {
   return listVisibleTabsUncached();
+}
+
+// Name of the auto-created config tab holding every dropdown/multiselect's
+// option list — a "List | Option" table, one row per option, grouped by
+// the "List" column into whatever the widget asks for by name (SITES,
+// ASSIGNEES, "Daily Status.Status", etc. — see field-config.js's
+// DEFAULT_OPTIONS keys, which this tab's starting rows exactly mirror).
+// Add, remove, reorder, or retype rows here any time — no code change, no
+// redeploy, just wait out CACHE_SECONDS or use the widget's Settings ->
+// "Refresh tabs & fields" to see it immediately. Starts with "_" so it's
+// hidden from the widget's tab list like _Config/_Holidays/_Leave-tab-isn't.
+//
+// Want this locked down so only specific people can edit it? This tab
+// (like any tab) can be protected natively in Sheets — no password to
+// manage or leak: select the _Options tab -> right-click -> "Protect
+// sheet" -> choose exactly who's allowed to edit. Everyone else sees it
+// read-only (or not at all, depending on their sharing access) while the
+// widget itself keeps reading it fine either way, since it reads via this
+// script's own authorization, not the requesting person's.
+var OPTIONS_TAB_NAME = '_Options';
+
+/** Created once, the first time anything asks for the tab list, pre-filled
+ * with every option list this app currently ships with — so editing means
+ * changing real starting values, not building a list from an empty tab.
+ * Never touched again after that first creation, same as ensureLeaveTab(). */
+function ensureOptionsTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(OPTIONS_TAB_NAME)) return;
+  var sheet = ss.insertSheet(OPTIONS_TAB_NAME);
+
+  var defaults = {
+    SITES: ['MHF', 'FV', 'Peds', 'GI', 'Specialty Pharmacy', 'All'],
+    REQUESTERS: ['Cassandra', 'Tseten', 'Grant', 'Tammy', 'Naveen'],
+    ASSIGNEES: ['Naveen', 'Surya', 'Amulya', 'Cassandra', 'Tseten', 'Grant', 'Tammy', 'Lucy', 'Erika'],
+    LEAVE_NAMES: ['Amulya Kumar', 'Suryaraj', 'Naveen Raj'],
+    'Daily Status.Status': ['Done', 'Pending', 'In Progress', 'Open'],
+    'Daily Status.Priority': ['High', 'Medium', 'Low'],
+    'Cleanup_Activities.Volume': ['Large', 'Medium', 'Small'],
+    'Drupal_Bugs_&_Improvements.Type': ['Bug', 'Fix', 'Suggestion'],
+    'Leave.Type': ['Vacation', 'Sick', 'WFH', 'Holiday', 'Other'],
+  };
+
+  var rows = [['List', 'Option']];
+  Object.keys(defaults).forEach(function (list) {
+    defaults[list].forEach(function (option) {
+      rows.push([list, option]);
+    });
+  });
+  sheet.getRange(1, 1, rows.length, 2).setValues(rows);
+  sheet.hideSheet();
+}
+
+/** Groups _Options' rows by the "List" column, in the order they appear
+ * on the sheet (so reordering rows there reorders the dropdown too). A
+ * row with a blank List or Option is skipped rather than producing a
+ * broken/empty entry. */
+function getOptionsMap() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(OPTIONS_TAB_NAME);
+  if (!sheet) return {};
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return {};
+
+  var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  var map = {};
+  values.forEach(function (row) {
+    var list = String(row[0]).trim();
+    var option = String(row[1]).trim();
+    if (!list || !option) return;
+    if (!map[list]) map[list] = [];
+    map[list].push(option);
+  });
+  return map;
 }
 
 function getSheetByName(name) {

@@ -2,13 +2,40 @@
 // auto-computed "Week" — everything else falls back to a plain text box.
 // Tab names here must match the actual sheet tab names exactly.
 
-const SITES = ['MHF', 'FV', 'Peds', 'GI', 'Specialty Pharmacy', 'All'];
-const REQUESTERS = ['Cassandra', 'Tseten', 'Grant', 'Tammy', 'Naveen'];
-const ASSIGNEES = ['Naveen', 'Surya', 'Amulya', 'Cassandra', 'Tseten', 'Grant', 'Tammy', 'Lucy', 'Erika'];
-// Deliberately its own list, not ASSIGNEES — Leave is scoped to just this
-// smaller group, while ASSIGNEES (the wider team) still backs "Assigned to"
-// on every other tab and shouldn't shrink along with this one.
-const LEAVE_NAMES = ['Amulya Kumar', 'Suryaraj', 'Naveen Raj'];
+// Every dropdown/multiselect below references an *options key* (a string,
+// e.g. 'SITES' or 'Daily Status.Status') instead of a literal array — the
+// actual list comes from the live _Options sheet tab at runtime (see
+// resolveOptions() below and Code.gs's getOptionsMap()), so adding,
+// removing, or reordering choices is a sheet edit, not a code change.
+// These DEFAULT_OPTIONS are the fallback used if the sheet's copy of a key
+// is missing/empty (including the very first run, before _Options has
+// even been created yet) — the app never breaks over a missing key, it
+// just falls back to what it always shipped with. They also double as the
+// exact starting rows ensureOptionsTab() seeds the sheet with, so editing
+// there means editing real values, not building a list from scratch.
+const DEFAULT_OPTIONS = {
+  SITES: ['MHF', 'FV', 'Peds', 'GI', 'Specialty Pharmacy', 'All'],
+  REQUESTERS: ['Cassandra', 'Tseten', 'Grant', 'Tammy', 'Naveen'],
+  ASSIGNEES: ['Naveen', 'Surya', 'Amulya', 'Cassandra', 'Tseten', 'Grant', 'Tammy', 'Lucy', 'Erika'],
+  // Deliberately its own key, not ASSIGNEES — Leave is scoped to just this
+  // smaller group, while ASSIGNEES (the wider team) still backs "Assigned
+  // to" on every other tab and shouldn't shrink along with this one.
+  LEAVE_NAMES: ['Amulya Kumar', 'Suryaraj', 'Naveen Raj'],
+  'Daily Status.Status': ['Done', 'Pending', 'In Progress', 'Open'],
+  'Daily Status.Priority': ['High', 'Medium', 'Low'],
+  'Cleanup_Activities.Volume': ['Large', 'Medium', 'Small'],
+  'Drupal_Bugs_&_Improvements.Type': ['Bug', 'Fix', 'Suggestion'],
+  'Leave.Type': ['Vacation', 'Sick', 'WFH', 'Holiday', 'Other'],
+};
+
+// `liveOptions` is whatever came back from GET ?action=options (a plain
+// object of key -> array), fetched once at launch — see index.html. Falls
+// back to DEFAULT_OPTIONS per-key, not all-or-nothing, so a sheet that
+// only defines some lists still gets the rest from the shipped defaults.
+function resolveOptions(key, liveOptions) {
+  const fromSheet = liveOptions && liveOptions[key];
+  return fromSheet && fromSheet.length ? fromSheet : DEFAULT_OPTIONS[key] || [];
+}
 
 // Top-level menu the widget shows before the tab list — started life as
 // just "log a status update", now covers more than one kind of thing, so
@@ -24,35 +51,35 @@ const CATEGORIES = {
 
 const FIELD_CONFIG = {
   'Daily Status': {
-    Site: { type: 'select', options: SITES },
+    Site: { type: 'select', optionsKey: 'SITES' },
     Date: { type: 'date' },
     Week: { type: 'week-auto', basedOn: 'Date' },
-    Status: { type: 'select', options: ['Done', 'Pending', 'In Progress', 'Open'] },
-    Priority: { type: 'select', options: ['High', 'Medium', 'Low'] },
-    'Assigned to': { type: 'multiselect', options: ASSIGNEES },
+    Status: { type: 'select', optionsKey: 'Daily Status.Status' },
+    Priority: { type: 'select', optionsKey: 'Daily Status.Priority' },
+    'Assigned to': { type: 'multiselect', optionsKey: 'ASSIGNEES' },
   },
   Adhoc_Mails: {
-    Requester: { type: 'select', options: REQUESTERS },
-    Site: { type: 'select', options: SITES },
+    Requester: { type: 'select', optionsKey: 'REQUESTERS' },
+    Site: { type: 'select', optionsKey: 'SITES' },
     Date: { type: 'date' },
     Week: { type: 'week-auto', basedOn: 'Date' },
-    'Assigned to': { type: 'multiselect', options: ASSIGNEES },
+    'Assigned to': { type: 'multiselect', optionsKey: 'ASSIGNEES' },
   },
   Cleanup_Activities: {
     'Cleanup Number': { type: 'sequence' },
-    Volume: { type: 'select', options: ['Large', 'Medium', 'Small'] },
-    Requester: { type: 'select', options: REQUESTERS },
-    'Site Impacted': { type: 'select', options: SITES },
+    Volume: { type: 'select', optionsKey: 'Cleanup_Activities.Volume' },
+    Requester: { type: 'select', optionsKey: 'REQUESTERS' },
+    'Site Impacted': { type: 'select', optionsKey: 'SITES' },
     Date: { type: 'date' },
     Week: { type: 'week-auto', basedOn: 'Date' },
-    'Assigned to': { type: 'multiselect', options: ASSIGNEES },
+    'Assigned to': { type: 'multiselect', optionsKey: 'ASSIGNEES' },
   },
   'Drupal_Bugs_&_Improvements': {
-    Website: { type: 'select', options: SITES },
+    Website: { type: 'select', optionsKey: 'SITES' },
     Date: { type: 'date' },
     Week: { type: 'week-auto', basedOn: 'Date' },
-    Type: { type: 'select', options: ['Bug', 'Fix', 'Suggestion'] },
-    'Assigned to': { type: 'multiselect', options: ASSIGNEES },
+    Type: { type: 'select', optionsKey: 'Drupal_Bugs_&_Improvements.Type' },
+    'Assigned to': { type: 'multiselect', optionsKey: 'ASSIGNEES' },
   },
   // Auto-created server-side (see ensureLeaveTab() in Code.gs) the first
   // time the widget asks for the tab list — this config just makes that
@@ -60,10 +87,10 @@ const FIELD_CONFIG = {
   // text boxes for every field. One person per leave entry, so a plain
   // `select` (not `multiselect` like "Assigned to" elsewhere) fits better.
   Leave: {
-    Name: { type: 'select', options: LEAVE_NAMES },
+    Name: { type: 'select', optionsKey: 'LEAVE_NAMES' },
     Date: { type: 'date' },
     Week: { type: 'week-auto', basedOn: 'Date' },
-    Type: { type: 'select', options: ['Vacation', 'Sick', 'WFH', 'Holiday', 'Other'] },
+    Type: { type: 'select', optionsKey: 'Leave.Type' },
   },
 };
 

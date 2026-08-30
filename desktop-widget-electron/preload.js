@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('statusApp', {
   getTabs: () => ipcRenderer.invoke('get-tabs'),
   getColumns: (tab) => ipcRenderer.invoke('get-columns', tab),
+  getOptions: () => ipcRenderer.invoke('get-options'),
   submitEntry: (tab, values) => ipcRenderer.invoke('submit-entry', { tab, values }),
   sendReportNow: (range) => ipcRenderer.invoke('send-report-now', range),
   downloadReport: (range) => ipcRenderer.invoke('download-report', range),

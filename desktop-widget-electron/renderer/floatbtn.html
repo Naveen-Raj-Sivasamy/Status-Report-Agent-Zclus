@@ -15,12 +15,17 @@
     -webkit-user-select: none;
     -webkit-app-region: drag;
   }
-  /* Inner: the click target — your icon exactly as uploaded, no background/border. */
+  /* Inner: the click target — your icon exactly as uploaded, no background/border.
+     Deliberately left as a `drag` region (same as #btn, not `no-drag`): a
+     plain click still fires normally as long as the mouse doesn't move, so
+     clicking still opens the popup — but now grabbing the icon itself (not
+     just the thin rim around it) also drags the window, which is what
+     people naturally try first. */
   #hit {
-    width: 46px; height: 46px;
+    width: 55px; height: 55px; /* 46 +20% — was reading smaller than other desktop icons */
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
-    -webkit-app-region: no-drag;
+    -webkit-app-region: drag;
   }
   #hit img {
     width: 100%; height: 100%; object-fit: contain;

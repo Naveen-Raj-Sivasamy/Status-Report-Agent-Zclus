@@ -379,7 +379,7 @@ function savePosition(x, y) {
 function createFloatButton() {
   const saved = loadSavedPosition();
   const primary = screen.getPrimaryDisplay().workArea;
-  const size = 56;
+  const size = 67; // 56 +20% — was reading smaller than other desktop icons
   const x = saved ? saved.x : primary.x + primary.width - size - 24;
   const y = saved ? saved.y : primary.y + Math.round(primary.height / 2);
 
@@ -423,8 +423,14 @@ function createFloatButton() {
 function startMainApp() {
   if (app.dock) app.dock.hide(); // tray/floating-button app, no dock icon needed
 
+  // Windows always fits this to its own fixed notification-area slot
+  // regardless of the source size we pass in — so a bigger source doesn't
+  // risk an oversized tray icon, it just gives Windows more detail to
+  // downscale from instead of upscaling a too-small 20x20 bitmap on
+  // anything above 100% display scaling, which is what was making it look
+  // softer/smaller than other apps' tray icons.
   const trayImg = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray.png'));
-  tray = new Tray(trayImg.resize({ width: 20, height: 20 }));
+  tray = new Tray(trayImg.resize({ width: 32, height: 32 }));
   tray.setToolTip('Status Report Generator');
   tray.on('click', toggleWindow);
   tray.setContextMenu(

@@ -204,6 +204,15 @@ function doPost(e) {
      * request) when you actually want a preview. */
     if (body.action === 'sendTestReport') {
       if (!body.to) return jsonOut({ ok: false, error: 'Missing "to".' });
+      // Restricted to REPORT_RECIPIENTS, not an arbitrary address — the
+      // shared TOKEN is baked into every installed widget (and has leaked
+      // once before, which is why it exists as a Script Property instead
+      // of hardcoded now), so letting `to` be attacker-controlled would
+      // turn this into a way to mail the full report — attachment
+      // included — to any outside address using nothing but that token.
+      if (REPORT_RECIPIENTS.indexOf(body.to) === -1) {
+        return jsonOut({ ok: false, error: '"to" must be one of REPORT_RECIPIENTS.' });
+      }
       var testRange = parseRangeFromRequest(body) || getCurrentWeekRange();
       var testBuilt = buildReportBlob(testRange);
       var testSheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();

@@ -63,7 +63,10 @@ came in (the script fills it in automatically; leave it out of the form).
      Drive-export) — it's your own script acting on your own Sheet.
    - Copy the `.../exec` URL it gives you — that's your `WEBHOOK_URL`.
 6. In the Apps Script editor, run `setupTriggers` once (select it from the
-   function dropdown → Run). This installs the two weekly triggers. You'll
+   function dropdown → Run). This installs the Friday reminder/report
+   triggers plus the every-15-minutes urgent-mail check (see below —
+   harmless to leave running even if you never configure `URGENT_SENDERS`/
+   `URGENT_KEYWORDS`; it just does nothing without either one set). You'll
    be asked to authorize again the first time — that's expected.
 
 Whenever you edit `Code.gs` later, **redeploy** (Deploy → Manage
@@ -75,6 +78,30 @@ update a live Web App deployment.
 In your Teams channel: **⋯ → Connectors → Incoming Webhook** → name it,
 copy the URL, paste into `TEAMS_WEBHOOK_URL`. No admin approval needed on
 most tenants for this (unlike a full Azure app registration).
+
+### Optional: urgent-mail red flag
+
+`checkUrgentMail()` runs every 15 minutes and shows a red badge on the
+floating icon and tray icon (in whichever teammate's widget matches
+`URGENT_ALERT_FOR` in `Code.gs`) when unread mail matches a `URGENT_SENDERS`
+or `URGENT_KEYWORDS` row in the `_Options` tab — add rows there the same
+way you'd edit any other dropdown list, no code change needed.
+
+**Important limits, not bugs**: this can only ever read the Gmail inbox of
+whoever authorized the Apps Script project — there's no way for one shared
+backend to read each teammate's separate inbox, so `URGENT_ALERT_FOR` can
+only ever name one person. And keyword matching is a blunt instrument —
+expect some false positives ("let's talk today") and some real urgent
+mail that just doesn't use any listed word.
+
+**Requires one extra authorization step**, since reading Gmail is a new
+permission beyond what `authorizeApis()` already covers: in the Apps
+Script editor, select `checkUrgentMail` in the function dropdown → Run →
+approve the Gmail permission prompt. A flagged email gets a
+`StatusReportAgent/Flagged` Gmail label (and every scanned email, matched
+or not, gets `StatusReportAgent/Scanned` so it's never re-evaluated) — you
+can see both directly in Gmail. The badge clears itself once you read the
+flagged email; there's no separate dismiss step in the app.
 
 ## 3. Configure and run the desktop widget
 

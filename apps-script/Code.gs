@@ -14,15 +14,23 @@
  *    change — this is most of the speed-up if things feel slow. Run
  *    clearCache() manually after adding/renaming a tab or column if you
  *    want the change to show up immediately instead of waiting it out.
- * 2. Two time-driven jobs you wire up once via setupTriggers():
+ * 2. Three time-driven jobs you wire up once via setupTriggers():
  *      sendFridayReminder()              -> 6pm Friday, nudges the team
  *      scheduledCompileAndSendReport()   -> ~11pm Friday, emails THIS WEEK'S
  *                                    rows only (Mon-Fri), as a .xlsx, to
  *                                    RECIPIENTS. Thin wrapper around
  *                                    compileAndSendReport() — see below.
- *    Both are skipped automatically on any date listed in the optional
- *    _Holidays tab (see HOLIDAYS_TAB_NAME) — a manual send always goes
- *    through compileAndSendReport() directly and ignores holidays.
+ *      checkUrgentMail()                 -> every 15 min, flags unread mail
+ *                                    from URGENT_SENDERS or matching
+ *                                    URGENT_KEYWORDS (both in _Options) as
+ *                                    a red badge in URGENT_ALERT_FOR's
+ *                                    widget. Can only ever read THIS
+ *                                    script's own authorized Gmail inbox —
+ *                                    see URGENT_ALERT_FOR's comment.
+ *    The two Friday jobs are skipped automatically on any date listed in
+ *    the optional _Holidays tab (see HOLIDAYS_TAB_NAME) — a manual send
+ *    always goes through compileAndSendReport() directly and ignores
+ *    holidays. checkUrgentMail() runs regardless of holidays.
  *
  * Each sheet tab's row 1 must be column headers. Any tab whose name
  * starts with "_" is treated as config/internal and hidden from the
@@ -82,6 +90,31 @@ var REMINDER_RECIPIENTS = REMINDER_RECIPIENTS_OVERRIDE_.length ? REMINDER_RECIPI
 // to skip Teams entirely. (Team > channel > Connectors > Incoming Webhook —
 // no admin/IT app registration needed for this, most tenants allow it.)
 var TEAMS_WEBHOOK_URL = '';
+
+// checkUrgentMail() (see SCHEDULED JOBS below) can only ever read the
+// Gmail inbox of whoever this Apps Script project is authorized under —
+// there's no way for a shared backend like this to read each teammate's
+// own separate inbox. So the flag it produces is only ever "this one
+// person's inbox has something urgent", and the desktop widget only
+// shows the red badge when its own YOUR_NAME matches this exactly
+// (case-insensitive). Blank means nobody's widget ever shows it.
+var URGENT_ALERT_FOR = 'Naveen Raj';
+
+// Base name for the two Gmail labels checkUrgentMail() manages:
+//   <this>/Scanned  — applied to EVERY thread it looks at, match or not.
+//                      This is the dedup marker: a thread with this label
+//                      is never re-evaluated on a later run.
+//   <this>/Flagged  — applied only to threads that actually matched. A
+//                      thread only counts toward the badge while it's
+//                      BOTH labeled Flagged AND still unread — reading it
+//                      in Gmail is what clears it, no separate "dismiss"
+//                      step needed in the app.
+var URGENT_LABEL_NAME = 'StatusReportAgent';
+
+// How far back checkUrgentMail() looks for new (not-yet-labeled) mail on
+// each run. Wide enough that a 15-minute trigger never misses a message
+// that arrived since the last run, without re-scanning your whole inbox.
+var URGENT_LOOKBACK = 'newer_than:1d';
 
 // Column name (must match a header in every tab) auto-filled with the
 // submission time, IF such a column exists. None of the current tabs have
@@ -169,6 +202,18 @@ function doGet(e) {
      * redeploy for every tweak. */
     if (action === 'options') {
       return jsonOut({ ok: true, options: cached('options', getOptionsMap) });
+    }
+    /** Polled by the widget every few minutes for the urgent-mail red
+     * badge (see checkUrgentMail(), which is what actually updates this —
+     * this endpoint just reads the last result, it never scans Gmail
+     * itself, so it's cheap and fast regardless of poll frequency).
+     * alertFor tells the widget WHOSE flag this is, since it can only
+     * ever be one person's inbox — the widget only shows the badge when
+     * its own YOUR_NAME matches. */
+    if (action === 'urgentStatus') {
+      var raw = PropertiesService.getScriptProperties().getProperty('URGENT_STATUS');
+      var status = raw ? JSON.parse(raw) : { count: 0, updatedAt: null };
+      return jsonOut({ ok: true, alertFor: URGENT_ALERT_FOR, count: status.count, updatedAt: status.updatedAt });
     }
     return jsonOut({ ok: true, message: 'Status Report Tracker Agent API is running.' });
   } catch (err) {
@@ -354,7 +399,70 @@ function setupTriggers() {
     .nearMinute(0)
     .create();
 
-  Logger.log('Triggers installed: Friday 6pm reminder, Friday 11pm report.');
+  ScriptApp.newTrigger('checkUrgentMail')
+    .timeBased()
+    .everyMinutes(15)
+    .create();
+
+  Logger.log('Triggers installed: Friday 6pm reminder, Friday 11pm report, urgent-mail check every 15 min.');
+}
+
+/**
+ * Scans for new unread mail matching URGENT_SENDERS/URGENT_KEYWORDS (both
+ * from _Options — see ensureOptionsTab()), labels every message it looks
+ * at (matched or not) with URGENT_LABEL_NAME so it's never re-evaluated,
+ * then recounts how many *still-unread, already-labeled* messages exist —
+ * that recount, not the scan itself, is what decides the badge. Reading a
+ * flagged email in Gmail is what clears it; there's no separate "dismiss"
+ * button in the app. Writes { count, updatedAt } to a Script Property the
+ * widget polls via GET ?action=urgentStatus.
+ *
+ * Requires the gmail.modify scope in appsscript.json (already added) and
+ * your own one-time re-authorization — run this function once manually
+ * from the editor and approve the Gmail permission prompt.
+ */
+function checkUrgentMail() {
+  if (!URGENT_ALERT_FOR) return; // feature off if nobody's configured to receive it
+
+  var scannedLabelName = URGENT_LABEL_NAME + '/Scanned';
+  var flaggedLabelName = URGENT_LABEL_NAME + '/Flagged';
+
+  var options = getOptionsMap();
+  var senders = (options.URGENT_SENDERS || []).map(function (s) { return s.toLowerCase(); });
+  var keywords = (options.URGENT_KEYWORDS || []).map(function (k) { return k.toLowerCase(); });
+
+  if (senders.length || keywords.length) {
+    var scannedLabel = GmailApp.getUserLabelByName(scannedLabelName) || GmailApp.createLabel(scannedLabelName);
+    var flaggedLabel = GmailApp.getUserLabelByName(flaggedLabelName) || GmailApp.createLabel(flaggedLabelName);
+    // Excludes anything already Scanned (matched or not) — that's the
+    // dedup — NOT anything already Flagged, since a Flagged-but-unread
+    // thread is also always Scanned already and so is excluded anyway.
+    var threads = GmailApp.search('is:unread ' + URGENT_LOOKBACK + ' -label:"' + scannedLabelName + '"');
+    threads.forEach(function (thread) {
+      var messages = thread.getMessages();
+      var matched = messages.some(function (message) {
+        var from = String(message.getFrom() || '').toLowerCase();
+        var subject = String(message.getSubject() || '').toLowerCase();
+        var snippet = String(message.getPlainBody() || '').slice(0, 500).toLowerCase();
+        var fromMatch = senders.some(function (s) { return from.indexOf(s) !== -1; });
+        var keywordMatch = keywords.some(function (k) {
+          return subject.indexOf(k) !== -1 || snippet.indexOf(k) !== -1;
+        });
+        return fromMatch || keywordMatch;
+      });
+      if (matched) thread.addLabel(flaggedLabel);
+      thread.addLabel(scannedLabel); // evaluated either way — never scan this thread again
+    });
+  }
+
+  var stillFlagged = senders.length || keywords.length
+    ? GmailApp.search('is:unread label:"' + flaggedLabelName + '"').length
+    : 0;
+
+  PropertiesService.getScriptProperties().setProperty('URGENT_STATUS', JSON.stringify({
+    count: stillFlagged,
+    updatedAt: new Date().toISOString(),
+  }));
 }
 
 /** Rows under HOLIDAYS_TAB_NAME, if that tab exists, are compared against
@@ -608,30 +716,51 @@ var OPTIONS_TAB_NAME = '_Options';
  * Never touched again after that first creation, same as ensureLeaveTab(). */
 function ensureOptionsTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getSheetByName(OPTIONS_TAB_NAME)) return;
-  var sheet = ss.insertSheet(OPTIONS_TAB_NAME);
+  var sheet = ss.getSheetByName(OPTIONS_TAB_NAME);
+  var isNew = !sheet;
+  if (isNew) {
+    sheet = ss.insertSheet(OPTIONS_TAB_NAME);
+    sheet.getRange(1, 1, 1, 2).setValues([['List', 'Option']]);
+    sheet.hideSheet();
+  }
 
-  var defaults = {
-    SITES: ['MHF', 'FV', 'Peds', 'GI', 'Specialty Pharmacy', 'All'],
-    REQUESTERS: ['Cassandra', 'Tseten', 'Grant', 'Tammy', 'Naveen'],
-    ASSIGNEES: ['Naveen', 'Surya', 'Amulya', 'Cassandra', 'Tseten', 'Grant', 'Tammy', 'Lucy', 'Erika'],
-    LEAVE_NAMES: ['Amulya Kumar', 'Suryaraj', 'Naveen Raj'],
-    'Daily Status.Status': ['Done', 'Pending', 'In Progress', 'Open'],
-    'Daily Status.Priority': ['High', 'Medium', 'Low'],
-    'Cleanup_Activities.Volume': ['Large', 'Medium', 'Small'],
-    'Drupal_Bugs_&_Improvements.Type': ['Bug', 'Fix', 'Suggestion'],
-    'Leave.Type': ['Vacation', 'Sick', 'WFH', 'Holiday', 'Other'],
-  };
-
-  var rows = [['List', 'Option']];
-  Object.keys(defaults).forEach(function (list) {
-    defaults[list].forEach(function (option) {
-      rows.push([list, option]);
+  // Not just "create if missing" — also backfills any DEFAULT_LISTS key
+  // that doesn't have real rows yet, so adding a new configurable list to
+  // this app later (like URGENT_KEYWORDS below) appends its starting
+  // values into your *already-existing* tab instead of silently doing
+  // nothing because the tab was already there. Never touches a list that
+  // already has at least one row — your edits to SITES/ASSIGNEES/etc.
+  // are never overwritten, only genuinely-new lists get added.
+  var existing = isNew ? {} : getOptionsMap();
+  var appendRows = [];
+  Object.keys(DEFAULT_LISTS).forEach(function (list) {
+    if (existing[list] && existing[list].length) return;
+    DEFAULT_LISTS[list].forEach(function (option) {
+      appendRows.push([list, option]);
     });
   });
-  sheet.getRange(1, 1, rows.length, 2).setValues(rows);
-  sheet.hideSheet();
+  if (appendRows.length) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, appendRows.length, 2).setValues(appendRows);
+  }
 }
+
+// The starting values ensureOptionsTab() seeds _Options with — both for a
+// brand-new tab and for backfilling any key added to this app after your
+// tab already existed (see the comment above). URGENT_SENDERS isn't here
+// deliberately: there's no sensible default VIP list, so it's just not
+// created until you add rows for it yourself.
+var DEFAULT_LISTS = {
+  SITES: ['MHF', 'FV', 'Peds', 'GI', 'Specialty Pharmacy', 'All'],
+  REQUESTERS: ['Cassandra', 'Tseten', 'Grant', 'Tammy', 'Naveen'],
+  ASSIGNEES: ['Naveen', 'Surya', 'Amulya', 'Cassandra', 'Tseten', 'Grant', 'Tammy', 'Lucy', 'Erika'],
+  LEAVE_NAMES: ['Amulya Kumar', 'Suryaraj', 'Naveen Raj'],
+  'Daily Status.Status': ['Done', 'Pending', 'In Progress', 'Open'],
+  'Daily Status.Priority': ['High', 'Medium', 'Low'],
+  'Cleanup_Activities.Volume': ['Large', 'Medium', 'Small'],
+  'Drupal_Bugs_&_Improvements.Type': ['Bug', 'Fix', 'Suggestion'],
+  'Leave.Type': ['Vacation', 'Sick', 'WFH', 'Holiday', 'Other'],
+  URGENT_KEYWORDS: ['urgent', 'asap', 'emergency', 'immediately', 'critical'],
+};
 
 /** Groups _Options' rows by the "List" column, in the order they appear
  * on the sheet (so reordering rows there reorders the dropdown too). A

@@ -260,6 +260,17 @@ function doPost(e) {
       return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
     }
     try {
+      // Checked INSIDE the lock, not before it — two people submitting
+      // leave for the same date within the same second or two would
+      // otherwise both pass a "is this date free" check done before
+      // either had actually written their row. Leave-specific: no other
+      // tab has this one-entry-per-date rule.
+      if (body.tab === LEAVE_TAB_NAME) {
+        var conflictName = findLeaveDateConflict(headers, sheet, values);
+        if (conflictName) {
+          return jsonOut({ ok: false, error: conflictName + ' has already applied for leave on this date.' });
+        }
+      }
       sheet.appendRow(row);
     } finally {
       lock.releaseLock();
@@ -371,12 +382,10 @@ function isHoliday(date) {
   if (lastRow <= 1) return false;
 
   var tz = Session.getScriptTimeZone();
-  var target = Utilities.formatDate(date, tz, 'yyyy-MM-dd');
+  var target = normalizeDateForCompare(date, tz);
   var values = sheet.getRange(2, dateIndex + 1, lastRow - 1, 1).getValues();
   return values.some(function (row) {
-    var raw = row[0];
-    var d = raw instanceof Date ? raw : new Date(raw);
-    return !isNaN(d.getTime()) && Utilities.formatDate(d, tz, 'yyyy-MM-dd') === target;
+    return normalizeDateForCompare(row[0], tz) === target;
   });
 }
 
@@ -437,6 +446,7 @@ function buildReportBlob(range) {
   // an explicit list of real tabs, not "whatever's visible in the widget
   // right now" (filtered defensively in case one's been renamed/removed).
   var tabNames = REPORT_TABS.filter(function (name) { return !!getSheetByName(name); });
+  var counts = []; // [{tab, count}, ...] in the same order as tabNames — used by the email body
 
   tabNames.forEach(function (tabName, i) {
     var source = getSheetByName(tabName);
@@ -455,6 +465,7 @@ function buildReportBlob(range) {
             return !isNaN(d.getTime()) && d >= range.start && d <= range.end;
           });
     }
+    counts.push({ tab: tabName, count: rows.length });
 
     var dest = i === 0 ? temp.getSheets()[0].setName(tabName) : temp.insertSheet(tabName);
     dest.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -467,7 +478,7 @@ function buildReportBlob(range) {
   var fileName = tempName + '.xlsx';
   var blob = exportSpreadsheetAsXlsx(temp.getId(), fileName);
   DriveApp.getFileById(temp.getId()).setTrashed(true); // clean up the temp file
-  return { blob: blob, fileName: fileName };
+  return { blob: blob, fileName: fileName, counts: counts };
 }
 
 function formatRangeLabel(range) {
@@ -486,12 +497,74 @@ function compileAndSendReport(range) {
   var built = buildReportBlob(range);
 
   var subject = 'Status Report — ' + formatRangeLabel(range);
-  var body = 'Attached is the status report for ' + formatRangeLabel(range) + '.\n\n' +
-    'Full sheet (all history): ' + SpreadsheetApp.getActiveSpreadsheet().getUrl();
+  var sheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
 
   REPORT_RECIPIENTS.forEach(function (addr) {
-    MailApp.sendEmail({ to: addr, subject: subject, body: body, attachments: [built.blob] });
+    MailApp.sendEmail({
+      to: addr,
+      subject: subject,
+      body: reportEmailPlainText(range, built, sheetUrl), // plain-text fallback for clients that don't render HTML
+      htmlBody: reportEmailHtml(range, built, sheetUrl),
+      attachments: [built.blob],
+    });
   });
+}
+
+/** Row-count summary table + a styled banner matching the desktop
+ * widget's own maroon branding — see EMAIL_BRAND_COLOR below to change
+ * it. Kept to inline styles only (no <style> block, no external
+ * anything): most corporate mail clients (Outlook especially) strip or
+ * ignore a <style> tag, so this is the one approach that actually
+ * renders consistently rather than degrading in exactly the inboxes
+ * REPORT_RECIPIENTS are most likely reading from. */
+function reportEmailHtml(range, built, sheetUrl) {
+  var rowsHtml = built.counts.map(function (c) {
+    return '<tr>' +
+      '<td style="padding:8px 14px;border-bottom:1px solid #e7dade;color:#2a2020;">' + escapeHtml_(c.tab) + '</td>' +
+      '<td style="padding:8px 14px;border-bottom:1px solid #e7dade;color:#2a2020;text-align:right;font-weight:700;">' + c.count + '</td>' +
+      '</tr>';
+  }).join('');
+  var total = built.counts.reduce(function (sum, c) { return sum + c.count; }, 0);
+
+  return '' +
+    '<div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;">' +
+      '<div style="background:' + EMAIL_BRAND_COLOR + ';border-radius:12px 12px 0 0;padding:20px 24px;">' +
+        '<div style="color:#ffffff;font-size:18px;font-weight:700;">Status Report</div>' +
+        '<div style="color:#e8c9cf;font-size:13px;font-weight:600;margin-top:4px;">' + escapeHtml_(formatRangeLabel(range)) + '</div>' +
+      '</div>' +
+      '<div style="border:1px solid #e7dade;border-top:none;border-radius:0 0 12px 12px;padding:20px 24px;">' +
+        '<div style="color:#2a2020;font-size:13px;margin-bottom:14px;">' +
+          'The attached <b>.xlsx</b> covers ' + total + ' ' + (total === 1 ? 'entry' : 'entries') + ' across ' + built.counts.length + ' ' + (built.counts.length === 1 ? 'tab' : 'tabs') + ':' +
+        '</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12.5px;">' + rowsHtml + '</table>' +
+        '<div style="margin-top:20px;">' +
+          '<a href="' + sheetUrl + '" style="display:inline-block;background:#ffb700;color:#2a2020;font-size:13px;font-weight:700;text-decoration:none;padding:10px 18px;border-radius:9px;">View Full Sheet</a>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+}
+
+/** Same content as reportEmailHtml(), no markup — MailApp.sendEmail's
+ * `body` param, shown by mail clients that ignore htmlBody entirely. */
+function reportEmailPlainText(range, built, sheetUrl) {
+  var lines = built.counts.map(function (c) { return '  ' + c.tab + ': ' + c.count; });
+  var total = built.counts.reduce(function (sum, c) { return sum + c.count; }, 0);
+  return 'Attached is the status report for ' + formatRangeLabel(range) + '.\n\n' +
+    total + ' entries across ' + built.counts.length + ' tabs:\n' + lines.join('\n') + '\n\n' +
+    'Full sheet (all history): ' + sheetUrl;
+}
+
+// Change this to re-theme the report email — currently the same maroon as
+// the desktop widget's own header (var(--brand) in index.html), so the
+// two feel like one product instead of the email looking bolted-on.
+var EMAIL_BRAND_COLOR = '#6e1b2c';
+
+function escapeHtml_(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /** Same report as compileAndSendReport, but handed back as base64 instead
@@ -579,6 +652,42 @@ function ensureLeaveTab() {
   sheet.getRange(1, 1, 1, 5).setValues([['Name', 'Date', 'Type', 'Reason', 'Week']]);
 }
 
+/** One leave entry per date, team-wide — if `values`' Date already has a
+ * row on the Leave tab (from anyone, including the same person), returns
+ * that row's Name so doPost can reject the new one with a clear message;
+ * returns '' when the date's free. Only meaningful called while already
+ * holding the write lock (see doPost) — that's what makes the check
+ * atomic against two near-simultaneous submissions for the same date. */
+function findLeaveDateConflict(headers, sheet, values) {
+  var dateIndex = findColumnIndex(headers, 'Date');
+  var nameIndex = findColumnIndex(headers, 'Name');
+  if (dateIndex === -1) return ''; // no Date column on this tab — nothing to check
+
+  var tz = Session.getScriptTimeZone();
+  var target = normalizeDateForCompare(values[headers[dateIndex]], tz);
+  if (!target) return ''; // no valid incoming date — let the normal required-field flow handle it
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return '';
+
+  var numCols = Math.max(dateIndex, nameIndex) + 1;
+  var rows = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+  for (var i = 0; i < rows.length; i++) {
+    if (normalizeDateForCompare(rows[i][dateIndex], tz) === target) {
+      return nameIndex === -1 ? 'Someone' : (String(rows[i][nameIndex]).trim() || 'Someone');
+    }
+  }
+  return '';
+}
+
+/** Calendar-day-only comparison (script timezone), same rule isHoliday()
+ * and the report's date filtering already use — returns '' for anything
+ * that isn't a valid date instead of throwing. */
+function normalizeDateForCompare(raw, tz) {
+  var d = raw instanceof Date ? raw : new Date(raw);
+  return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+}
+
 function listVisibleTabs() {
   return listVisibleTabsUncached();
 }
@@ -608,8 +717,17 @@ var OPTIONS_TAB_NAME = '_Options';
  * Never touched again after that first creation, same as ensureLeaveTab(). */
 function ensureOptionsTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getSheetByName(OPTIONS_TAB_NAME)) return;
-  var sheet = ss.insertSheet(OPTIONS_TAB_NAME);
+  var sheet = ss.getSheetByName(OPTIONS_TAB_NAME);
+  if (sheet) {
+    // Was hidden here originally, same as _Config — wrong call for this
+    // one specifically: unlike _Config (set-once, never touched again),
+    // _Options exists FOR you to keep editing, so hiding it just got in
+    // the way of its own purpose. Un-hides it every time this runs in
+    // case it's still hidden from an earlier version of this function.
+    sheet.showSheet();
+    return;
+  }
+  sheet = ss.insertSheet(OPTIONS_TAB_NAME);
 
   var defaults = {
     SITES: ['MHF', 'FV', 'Peds', 'GI', 'Specialty Pharmacy', 'All'],
@@ -630,7 +748,6 @@ function ensureOptionsTab() {
     });
   });
   sheet.getRange(1, 1, rows.length, 2).setValues(rows);
-  sheet.hideSheet();
 }
 
 /** Groups _Options' rows by the "List" column, in the order they appear

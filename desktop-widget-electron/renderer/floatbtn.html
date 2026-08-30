@@ -23,7 +23,6 @@
      Dragging-by-the-icon is implemented by hand below instead, entirely in
      JS via mousedown/mousemove + moveFloatBtnBy — see the script. */
   #hit {
-    position: relative; /* anchors #urgent-badge to this box, not some further-out ancestor */
     width: 55px; height: 55px; /* 46 +20% — was reading smaller than other desktop icons */
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
@@ -33,24 +32,12 @@
     width: 100%; height: 100%; object-fit: contain;
     pointer-events: none; /* clicks land on #hit, not the image itself */
   }
-  /* Mirrors the red dot baked into build/tray-urgent.png, so the icon and
-     the tray badge read as the same signal. Hidden by default; toggled by
-     the 'urgent-status' IPC message from main.js (see checkUrgentStatus). */
-  #urgent-badge {
-    display: none;
-    position: absolute; top: 2px; right: 2px;
-    width: 16px; height: 16px; border-radius: 50%;
-    background: #dc2626; border: 2px solid #ffffff;
-    pointer-events: none;
-  }
-  #urgent-badge.visible { display: block; }
 </style>
 </head>
 <body>
   <div id="btn">
     <div id="hit">
       <img src="../build/fab.png" alt="" />
-      <div id="urgent-badge"></div>
     </div>
   </div>
 <script>
@@ -93,10 +80,6 @@
   hit.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     window.statusApp.showFabMenu();
-  });
-
-  window.statusApp.onUrgentStatus(({ urgent }) => {
-    document.getElementById('urgent-badge').classList.toggle('visible', !!urgent);
   });
 </script>
 </body>

@@ -66,8 +66,6 @@ try {
 }
 
 let tray = null;
-let trayNormalImg = null;
-let trayUrgentImg = null;
 let popup = null;
 let floatBtn = null;
 let setupWin = null;
@@ -515,32 +513,6 @@ function rebuildTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate(buildAppMenuTemplate()));
 }
 
-// -------------------- urgent-mail red badge --------------------
-// checkUrgentMail() on the Apps Script side can only ever read ONE
-// person's Gmail inbox (whoever authorized the script) — see its own
-// comment in Code.gs. So this poll result only ever matters if THIS
-// installed widget's own YOUR_NAME matches alertFor; every other
-// teammate's widget just sees a count that isn't for them and ignores it.
-const URGENT_POLL_MS = 5 * 60 * 1000; // server only recomputes every 15 min anyway; this just needs to be "soon enough"
-let isUrgent = false;
-
-async function checkUrgentStatus() {
-  try {
-    const data = await apiGet({ action: 'urgentStatus' });
-    const mine = String(data.alertFor || '').trim().toLowerCase() === String(config.YOUR_NAME || '').trim().toLowerCase();
-    const nextUrgent = mine && data.count > 0;
-    if (nextUrgent === isUrgent) return; // no visible change — don't touch the icon/badge for no reason
-    isUrgent = nextUrgent;
-
-    if (tray) tray.setImage(isUrgent ? trayUrgentImg : trayNormalImg);
-    if (floatBtn && !floatBtn.isDestroyed()) {
-      floatBtn.webContents.send('urgent-status', { urgent: isUrgent });
-    }
-  } catch {
-    /* best-effort — a failed check just means the badge doesn't update this round, never crashes anything */
-  }
-}
-
 function startMainApp() {
   if (app.dock) app.dock.hide(); // tray/floating-button app, no dock icon needed
   applyLoginItemSetting();
@@ -551,18 +523,14 @@ function startMainApp() {
   // downscale from instead of upscaling a too-small 20x20 bitmap on
   // anything above 100% display scaling, which is what was making it look
   // softer/smaller than other apps' tray icons.
-  trayNormalImg = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray.png')).resize({ width: 32, height: 32 });
-  trayUrgentImg = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray-urgent.png')).resize({ width: 32, height: 32 });
-  tray = new Tray(trayNormalImg);
+  const trayImg = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray.png'));
+  tray = new Tray(trayImg.resize({ width: 32, height: 32 }));
   tray.setToolTip('Report Generator');
   tray.on('click', toggleWindow);
   rebuildTrayMenu();
 
   popup = createPopup();
   floatBtn = createFloatButton();
-
-  checkUrgentStatus();
-  setInterval(checkUrgentStatus, URGENT_POLL_MS);
 }
 
 app.whenReady().then(() => {

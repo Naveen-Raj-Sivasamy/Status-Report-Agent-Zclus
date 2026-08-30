@@ -22,5 +22,4 @@ contextBridge.exposeInMainWorld('statusApp', {
   resizeWindow: (height) => ipcRenderer.send('resize-window', height),
   moveFloatBtnBy: (dx, dy) => ipcRenderer.send('float-btn-move-by', { dx, dy }),
   clearCache: () => ipcRenderer.invoke('clear-cache'),
-  onUrgentStatus: (callback) => ipcRenderer.on('urgent-status', (_e, info) => callback(info)),
 });

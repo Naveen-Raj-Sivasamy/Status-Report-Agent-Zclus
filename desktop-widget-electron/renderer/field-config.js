@@ -5,6 +5,10 @@
 const SITES = ['MHF', 'FV', 'Peds', 'GI', 'Specialty Pharmacy', 'All'];
 const REQUESTERS = ['Cassandra', 'Tseten', 'Grant', 'Tammy', 'Naveen'];
 const ASSIGNEES = ['Naveen', 'Surya', 'Amulya', 'Cassandra', 'Tseten', 'Grant', 'Tammy', 'Lucy', 'Erika'];
+// Deliberately its own list, not ASSIGNEES — Leave is scoped to just this
+// smaller group, while ASSIGNEES (the wider team) still backs "Assigned to"
+// on every other tab and shouldn't shrink along with this one.
+const LEAVE_NAMES = ['Amulya Kumar', 'Suryaraj', 'Naveen Raj'];
 
 // Top-level menu the widget shows before the tab list — started life as
 // just "log a status update", now covers more than one kind of thing, so
@@ -56,7 +60,7 @@ const FIELD_CONFIG = {
   // text boxes for every field. One person per leave entry, so a plain
   // `select` (not `multiselect` like "Assigned to" elsewhere) fits better.
   Leave: {
-    Name: { type: 'select', options: ASSIGNEES },
+    Name: { type: 'select', options: LEAVE_NAMES },
     Date: { type: 'date' },
     Week: { type: 'week-auto', basedOn: 'Date' },
     Type: { type: 'select', options: ['Vacation', 'Sick', 'WFH', 'Holiday', 'Other'] },

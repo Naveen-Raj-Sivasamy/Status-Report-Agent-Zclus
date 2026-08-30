@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>Status Report Generator</title>
+<title>Report Generator</title>
 <style>
   :root {
     --brand: #6e1b2c;
@@ -82,7 +82,7 @@
   .tab-btn:hover { background: var(--surface-hover); }
   .tab-btn:active { transform: scale(0.98); }
 
-  /* The top-level category menu (Status Report Generator / Team
+  /* The top-level category menu (Report Generator / Team
      Management / ...) — deliberately bigger than a plain .tab-btn, not
      just for looks: with only 1-2 options on that first screen, the
      popup must not visibly shrink compared to every screen after it. A
@@ -247,7 +247,7 @@
   <div id="card">
     <header>
       <div>
-        <h1>Status Report Generator <span class="version-badge" id="version-badge"></span></h1>
+        <h1>Report Generator <span class="version-badge" id="version-badge"></span></h1>
         <div class="sub" id="header-sub">What are you logging status for?</div>
       </div>
       <div class="header-actions">
@@ -658,7 +658,7 @@
         els.main.appendChild(btn);
       });
 
-      // Match the tallest "menu" screen (Status Report Generator's 4-tab
+      // Match the tallest "menu" screen (Report Generator's 4-tab
       // list, ~253px of actual content) so this landing screen — often
       // just 1-2 category cards — doesn't render visibly smaller.
       els.main.style.minHeight = '255px';
@@ -682,7 +682,7 @@
     group = currentCategory;
     if (!group) return showCategoryPicker(); // nothing to go "back" to — land on the real start screen instead
 
-    els.sub.textContent = group.name === 'Status Report Generator'
+    els.sub.textContent = group.name === 'Report Generator'
       ? 'What are you logging status for?'
       : `${group.name} — choose an option`;
     els.footer.classList.add('hidden');
@@ -704,12 +704,12 @@
     backBtn.onclick = showCategoryPicker;
     els.main.appendChild(backBtn);
 
-    // View Report / Submit Report only make sense for the Status Report
+    // View Report / Submit Report only make sense for the Report
     // Generator category — REPORT_TABS (the server side of this) is
     // scoped to exactly those tabs, so offering "Submit Report" from
     // Team Management would compile a report that never includes
     // anything Team Management actually logged.
-    if (group.name === 'Status Report Generator') {
+    if (group.name === 'Report Generator') {
       els.reportActions.classList.remove('hidden');
     } else {
       els.reportActions.classList.add('hidden');

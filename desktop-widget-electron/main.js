@@ -301,7 +301,7 @@ function createSetupWindow() {
     fullscreenable: false,
     minimizable: false,
     maximizable: false,
-    title: 'Welcome — Status Report Generator',
+    title: 'Welcome — Report Generator',
     backgroundColor: '#6e1b2c',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -502,7 +502,7 @@ function startMainApp() {
   // softer/smaller than other apps' tray icons.
   const trayImg = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray.png'));
   tray = new Tray(trayImg.resize({ width: 32, height: 32 }));
-  tray.setToolTip('Status Report Generator');
+  tray.setToolTip('Report Generator');
   tray.on('click', toggleWindow);
   rebuildTrayMenu();
 

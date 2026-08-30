@@ -490,6 +490,13 @@ function compileAndSendReport(range) {
 /** Same report as compileAndSendReport, but handed back as base64 instead
  * of emailed — for the app's "Download" option. */
 function getReportFileBase64(range) {
+  // Was missing the same `range || getCurrentWeekRange()` default
+  // compileAndSendReport has right above — meant every "Download Report"
+  // with the default "This Week" selection (range comes through as null)
+  // crashed with "Cannot read properties of null (reading 'start')"
+  // instead of actually downloading anything. Found via a live test
+  // during a full test sweep.
+  range = range || getCurrentWeekRange();
   var built = buildReportBlob(range);
   return { fileName: built.fileName, base64: Utilities.base64Encode(built.blob.getBytes()) };
 }

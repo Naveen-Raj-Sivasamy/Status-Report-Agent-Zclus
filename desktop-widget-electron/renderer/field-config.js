@@ -18,7 +18,7 @@ const LEAVE_NAMES = ['Amulya Kumar', 'Suryaraj', 'Naveen Raj'];
 // bucketed into an auto-created "More" menu, so a newly added tab is
 // never silently unreachable, just uncategorized until it's added here.
 const CATEGORIES = {
-  'Status Report Generator': ['Daily Status', 'Adhoc_Mails', 'Cleanup_Activities', 'Drupal_Bugs_&_Improvements'],
+  'Report Generator': ['Daily Status', 'Adhoc_Mails', 'Cleanup_Activities', 'Drupal_Bugs_&_Improvements'],
   'Team Management': ['Leave'],
 };
 

@@ -56,6 +56,13 @@
   }
   .icon-btn:hover { background: rgba(255,255,255,0.24); }
 
+  /* min-height isn't set here — it's toggled via JS (main.style.minHeight)
+     only on the category landing screen and a category's tab list, so
+     those two "menu" screens stay a consistent size as you move between
+     them instead of the popup visibly shrinking for a short list (e.g.
+     Team Management's single "Leave" button) and growing again for a
+     longer one. Every other screen (forms, Settings, Report Options,
+     loading/error/result) explicitly clears it back to auto-height. */
   main { overflow-y: auto; padding: 6px 16px 12px; max-height: 605px; } /* cap: 504 +20% */
 
   .tab-btn {
@@ -345,6 +352,7 @@
   function showLoading(msg) {
     els.footer.classList.add('hidden');
     els.reportActions.classList.add('hidden');
+    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
     els.main.innerHTML = `
       <div id="status-view">
         <div class="spinner"></div>
@@ -355,6 +363,7 @@
   function showError(msg, retryFn) {
     els.footer.classList.add('hidden');
     els.reportActions.classList.add('hidden');
+    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
     els.main.innerHTML = `
       <div id="status-view">
         <div class="icon">⚠️</div>
@@ -393,6 +402,7 @@
     els.footer.classList.add('hidden');
     els.reportActions.classList.add('hidden');
     els.sub.textContent = '';
+    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
     els.main.innerHTML = `
       <div id="status-view" class="result-view">
         <div class="result-badge ${success ? 'success' : 'fail'}">${success ? '✓' : '✕'}</div>
@@ -488,6 +498,7 @@
     els.footer.classList.add('hidden');
     els.reportActions.classList.add('hidden');
     els.sub.textContent = 'Generate a report';
+    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
     els.main.innerHTML = `
       <div class="field">
         <label>Range</label>
@@ -584,6 +595,7 @@
     els.footer.classList.add('hidden');
     els.reportActions.classList.add('hidden');
     els.sub.textContent = 'Settings';
+    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
     els.main.innerHTML = `
       <button class="tab-btn" id="clear-cache-btn">Refresh tabs &amp; fields (clear cache)</button>
       <button class="secondary" id="settings-back-btn" style="width:100%; margin-top:10px;">Back</button>
@@ -645,6 +657,11 @@
         btn.onclick = () => showTabPicker(group);
         els.main.appendChild(btn);
       });
+
+      // Match the tallest "menu" screen (Status Report Generator's 4-tab
+      // list, ~253px of actual content) so this landing screen — often
+      // just 1-2 category cards — doesn't render visibly smaller.
+      els.main.style.minHeight = '255px';
     } catch (err) {
       showError(err.message || String(err), showCategoryPicker);
     }
@@ -669,6 +686,7 @@
       ? 'What are you logging status for?'
       : `${group.name} — choose an option`;
     els.footer.classList.add('hidden');
+    els.main.style.minHeight = '255px'; // same target as showCategoryPicker — see the comment on `main` in <style> above
     els.main.innerHTML = '';
 
     group.tabs.forEach((tab) => {

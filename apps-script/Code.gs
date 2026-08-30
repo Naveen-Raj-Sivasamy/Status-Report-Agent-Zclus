@@ -196,6 +196,27 @@ function doPost(e) {
       return jsonOut({ ok: true, message: 'Report sent.' });
     }
 
+    /** Same report as sendReportNow, but to exactly one address instead of
+     * the whole REPORT_RECIPIENTS list — for previewing a design/content
+     * change (like the HTML email) without emailing the entire team every
+     * time. Not exposed anywhere in the widget UI on purpose; call it
+     * directly (e.g. from the Apps Script editor's Run, or a one-off
+     * request) when you actually want a preview. */
+    if (body.action === 'sendTestReport') {
+      if (!body.to) return jsonOut({ ok: false, error: 'Missing "to".' });
+      var testRange = parseRangeFromRequest(body) || getCurrentWeekRange();
+      var testBuilt = buildReportBlob(testRange);
+      var testSheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
+      MailApp.sendEmail({
+        to: body.to,
+        subject: '[TEST] Status Report — ' + formatRangeLabel(testRange),
+        body: reportEmailPlainText(testRange, testBuilt, testSheetUrl),
+        htmlBody: reportEmailHtml(testRange, testBuilt, testSheetUrl),
+        attachments: [testBuilt.blob],
+      });
+      return jsonOut({ ok: true, message: 'Test report sent to ' + body.to + '.' });
+    }
+
     if (body.action === 'downloadReport') {
       var file = getReportFileBase64(parseRangeFromRequest(body));
       return jsonOut({ ok: true, fileName: file.fileName, base64: file.base64 });

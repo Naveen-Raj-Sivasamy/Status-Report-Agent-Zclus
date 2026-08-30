@@ -20,4 +20,5 @@ contextBridge.exposeInMainWorld('statusApp', {
   onSubmitRetry: (callback) => ipcRenderer.on('submit-retry', (_e, info) => callback(info)),
   resizeWindow: (height) => ipcRenderer.send('resize-window', height),
   moveFloatBtnBy: (dx, dy) => ipcRenderer.send('float-btn-move-by', { dx, dy }),
+  clearCache: () => ipcRenderer.invoke('clear-cache'),
 });

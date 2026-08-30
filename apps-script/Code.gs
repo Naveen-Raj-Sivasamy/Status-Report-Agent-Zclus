@@ -194,6 +194,15 @@ function doPost(e) {
       return jsonOut({ ok: true, fileName: file.fileName, base64: file.base64 });
     }
 
+    /** Lets the widget's Settings screen trigger the same clearCache()
+     * that used to require opening the Apps Script editor by hand — e.g.
+     * right after reordering tabs in the Sheet, so the new order shows up
+     * immediately instead of waiting out CACHE_SECONDS. */
+    if (body.action === 'clearCache') {
+      clearCache();
+      return jsonOut({ ok: true, message: 'Cache cleared.' });
+    }
+
     /** Called by the build-release CI workflow right after it publishes a
      * new installer, so the widget's "update available" banner and its
      * DownloadUrl-driven "Get it" button stay in sync automatically. */

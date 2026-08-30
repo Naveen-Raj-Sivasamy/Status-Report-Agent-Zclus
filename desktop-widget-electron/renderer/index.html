@@ -221,6 +221,7 @@
       </div>
       <div class="header-actions">
         <button class="update-link" id="update-link" title="A newer version is available">Update available</button>
+        <button class="icon-btn" id="settings-btn" title="Settings">⚙</button>
         <button class="icon-btn" id="close-btn" title="Close">✕</button>
       </div>
     </header>
@@ -254,6 +255,7 @@
     submitReportBtn: document.getElementById('submit-report-btn'),
     versionBadge: document.getElementById('version-badge'),
     updateLink: document.getElementById('update-link'),
+    settingsBtn: document.getElementById('settings-btn'),
   };
 
   let yourName = '';
@@ -552,6 +554,42 @@
     };
   }
 
+  // Each row is styled like a tab-picker entry so adding another setting
+  // later is just another button in this list — no new layout needed.
+  function showSettings() {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = 'Settings';
+    els.main.innerHTML = `
+      <button class="tab-btn" id="clear-cache-btn">Refresh tabs &amp; fields (clear cache)</button>
+      <button class="secondary" id="settings-back-btn" style="width:100%; margin-top:10px;">Back</button>
+    `;
+
+    document.getElementById('settings-back-btn').onclick = showTabPicker;
+
+    document.getElementById('clear-cache-btn').onclick = async () => {
+      showLoading('Clearing cache…');
+      try {
+        await window.statusApp.clearCache();
+        showResult({
+          success: true,
+          title: 'Cache Cleared',
+          subtitle: 'Tabs and fields refresh from the sheet next time you open them.',
+          doneLabel: 'Done',
+          onDone: showTabPicker,
+        });
+      } catch (err) {
+        showResult({
+          success: false,
+          title: 'Failed',
+          subtitle: err.message || String(err),
+          doneLabel: 'Try again',
+          onDone: showSettings,
+        });
+      }
+    };
+  }
+
   async function showTabPicker() {
     els.sub.textContent = 'What are you logging status for?';
     els.footer.classList.add('hidden');
@@ -746,6 +784,7 @@
   }
 
   els.closeBtn.onclick = () => window.statusApp.hideWindow();
+  els.settingsBtn.onclick = () => showSettings();
   document.getElementById('credit-link').onclick = (e) => {
     e.preventDefault();
     window.statusApp.openExternal('https://www.linkedin.com/in/naveen-raj-sivasamy-603826196');

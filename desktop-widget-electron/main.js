@@ -199,6 +199,17 @@ ipcMain.handle('submit-entry', async (event, { tab, values }) => {
 ipcMain.handle('send-report-now', async (_e, range) =>
   apiPostBody(Object.assign({ action: 'sendReportNow' }, range || {}))
 );
+ipcMain.handle('clear-cache', async () => {
+  const result = await apiPostBody({ action: 'clearCache' });
+  // Clearing just the server-side cache isn't enough on its own — this
+  // process also keeps its own in-memory copy (see refreshTabsCache /
+  // refreshColumnsCache above) that outlives any single popup open/close.
+  // Drop both here so the very next tab-list/columns request goes fully
+  // fresh instead of quietly serving stale data for the rest of this run.
+  tabsCache = null;
+  columnsCache = {};
+  return result;
+});
 ipcMain.handle('download-report', async (_e, range) => {
   const data = await apiPostBody(Object.assign({ action: 'downloadReport' }, range || {}));
   const { canceled, filePath } = await dialog.showSaveDialog({

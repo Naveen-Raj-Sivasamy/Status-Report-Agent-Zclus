@@ -281,6 +281,13 @@ Defaults: reminder at 6pm Friday, report at 11pm Friday, both in the
   doesn't index or guess these), and the `TOKEN` check in `doPost` blocks
   casual misuse — but treat the URL and token as semi-secret.
 - `compileAndSendReport` emails only **this week's rows (Mon-Fri)** from
-  `REPORT_TABS`, as a filtered `.xlsx` — not the entire spreadsheet.
-- Recipient list and the shared token both live in this Apps Script
-  project's Script Properties, not in `Code.gs` — see step 4 above.
+  `_Config`'s `ReportTabs` (a comma-separated list — see the `_Features`
+  sheet tab, or the widget's Settings -> "Manage fields & options" ->
+  Report Settings, for the easier way to edit it), as a filtered `.xlsx`
+  — not the entire spreadsheet.
+- Recipient list is `_Config`'s `ReportRecipients`/`ReminderRecipients`
+  (same two places to edit it), falling back to the
+  `REPORT_RECIPIENTS`/`REMINDER_RECIPIENTS` Script Properties if unset
+  there. The shared token (`SHARED_SECRET`) has no sheet-editable
+  equivalent — see step 4 above — since a token that lived in a sheet
+  cell would defeat its own purpose.

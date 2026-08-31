@@ -384,6 +384,19 @@ ipcMain.handle('save-categories', async (_e, categories) => {
   categoriesCache = null;
   return result;
 });
+// Report settings (ReportTabs/HiddenTabs/ReportRecipients/
+// ReminderRecipients) go through doPost on the backend, not doGet like
+// tabs/options/fieldSchema/categories — see the comment on doGet's
+// 'getReportSettings' omission in Code.gs. No in-memory cache here either:
+// this screen is opened rarely enough that a live read each time is fine,
+// and there's nothing else in this process that reads these values to
+// keep in sync.
+ipcMain.handle('get-report-settings', async () => apiPostBody({ action: 'getReportSettings' }));
+ipcMain.handle('save-report-settings', async (_e, settings) => {
+  const result = await apiPostBody({ action: 'saveReportSettings', settings });
+  tabsCache = null; // HiddenTabs can change which tabs the widget shows
+  return result;
+});
 ipcMain.handle('download-report', async (_e, range) => {
   const data = await apiPostBody(Object.assign({ action: 'downloadReport' }, range || {}));
   const { canceled, filePath } = await dialog.showSaveDialog({

@@ -131,6 +131,32 @@
       <div class="ok" id="cat-ok"></div>
     </div>
 
+    <div class="section">
+      <h3>Report Settings</h3>
+      <p class="hint">Which tabs feed the Friday report, which tabs stay hidden from the app (still usable directly in the Sheet), and who gets emailed.</p>
+
+      <div class="field-label">Tabs included in the Friday report</div>
+      <div class="cat-tabs" id="report-tabs-checks"></div>
+
+      <div class="field-label" style="margin-top:14px;">Tabs hidden from the app</div>
+      <div class="cat-tabs" id="hidden-tabs-checks"></div>
+
+      <div class="field-label" style="margin-top:14px;">Report recipients (weekly emailed report)</div>
+      <div id="report-recipients-rows"></div>
+      <button class="icon-btn" type="button" id="add-report-recipient-btn">+ Add email</button>
+
+      <div class="field-label" style="margin-top:14px;">Reminder recipients (Friday 6pm nudge)</div>
+      <p class="hint" style="margin: -2px 0 6px;">Leave empty to reuse the report recipients above.</p>
+      <div id="reminder-recipients-rows"></div>
+      <button class="icon-btn" type="button" id="add-reminder-recipient-btn">+ Add email</button>
+
+      <div class="row-actions">
+        <button id="save-report-settings-btn">Save Report Settings</button>
+      </div>
+      <div class="err" id="report-settings-err"></div>
+      <div class="ok" id="report-settings-ok"></div>
+    </div>
+
     <button class="secondary" id="close-btn" style="width:100%;">Close</button>
   </div>
 
@@ -139,6 +165,8 @@
   let optionsMap = {};
   let fieldSchemaMap = {};
   let categoriesMap = {};
+  let allTabs = []; // every real tab, including currently-hidden ones — Report Settings only
+  let reportSettings = { reportTabs: [], hiddenTabs: [], reportRecipients: [], reminderRecipients: [] };
 
   // Mirrors _FieldSchema's actual supported Type values exactly — see
   // buildFieldInput() in index.html and the _Features guide tab. '' means
@@ -175,19 +203,23 @@
     document.getElementById('gate').classList.add('hidden');
     document.getElementById('content').classList.remove('hidden');
     renderCompareTable(); // static — doesn't need the fetches below
-    const [tabsRes, optsRes, fsRes, catRes] = await Promise.all([
+    const [tabsRes, optsRes, fsRes, catRes, reportRes] = await Promise.all([
       window.statusApp.getTabs(),
       window.statusApp.getOptions(),
       window.statusApp.getFieldSchema(),
       window.statusApp.getCategories(),
+      window.statusApp.getReportSettings(),
     ]);
     liveTabs = (tabsRes && tabsRes.tabs) || [];
     optionsMap = (optsRes && optsRes.options) || {};
     fieldSchemaMap = (fsRes && fsRes.fieldSchema) || {};
     categoriesMap = (catRes && catRes.categories) || {};
+    allTabs = (reportRes && reportRes.allTabs) || [];
+    reportSettings = (reportRes && reportRes.reportSettings) || reportSettings;
     renderOptions();
     renderFieldSchema();
     renderCategories();
+    renderReportSettings();
   }
 
   async function saveSection(btnId, errId, okId, action) {
@@ -220,11 +252,13 @@
     ['Add / edit / delete a dropdown option', 'yes', 'yes'],
     ["Add / edit / delete a field's Type", 'yes', 'yes'],
     ['Add / edit / delete a category', 'yes', 'yes'],
+    ['Choose which tabs feed the Friday report', 'yes', 'yes'],
+    ['Hide a tab from the app', 'yes', 'yes'],
+    ['Change who gets report/reminder emails', 'yes', 'yes'],
     ['Create a brand-new tab', 'yes', 'no'],
     ['Rename or delete an existing tab', 'yes', 'no'],
-    ['Choose which tabs feed the Friday report', 'code', 'code'],
-    ['Change who gets report/reminder emails', 'code', 'no'],
     ['Change the connection token / admin password', 'no', 'yes'],
+    ['Reminder schedule (day/time) and holidays', 'code', 'code'],
   ];
   const BADGE_LABEL = { yes: '✓ Yes', no: '✗ No', code: '⚙ Code change' };
 
@@ -462,6 +496,82 @@
     });
     await saveSection('save-categories-btn', 'cat-err', 'cat-ok', () => window.statusApp.saveCategories(map));
     categoriesMap = map;
+  });
+
+  // -------------------- Report Settings --------------------
+
+  function buildTabCheckbox(tab, checked) {
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = tab;
+    cb.checked = checked;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(' ' + tab));
+    return label;
+  }
+
+  function buildEmailRow(value) {
+    const row = document.createElement('div');
+    row.className = 'opt-row';
+    const input = document.createElement('input');
+    input.type = 'email';
+    input.value = value || '';
+    input.placeholder = 'name@example.com';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn';
+    del.textContent = '✕';
+    del.onclick = () => row.remove();
+    row.appendChild(input);
+    row.appendChild(del);
+    return row;
+  }
+
+  function renderReportSettings() {
+    // allTabs, not liveTabs — a currently-hidden tab needs to be checkable
+    // here too (that's how you un-hide it), and liveTabs never includes
+    // one (see getTabs()/listVisibleTabs() in Code.gs).
+    const reportTabsSelected = new Set(reportSettings.reportTabs || []);
+    const hiddenTabsSelected = new Set(reportSettings.hiddenTabs || []);
+    const reportTabsContainer = document.getElementById('report-tabs-checks');
+    const hiddenTabsContainer = document.getElementById('hidden-tabs-checks');
+    reportTabsContainer.innerHTML = '';
+    hiddenTabsContainer.innerHTML = '';
+    allTabs.forEach((t) => {
+      reportTabsContainer.appendChild(buildTabCheckbox(t, reportTabsSelected.has(t)));
+      hiddenTabsContainer.appendChild(buildTabCheckbox(t, hiddenTabsSelected.has(t)));
+    });
+
+    const reportRecipientsContainer = document.getElementById('report-recipients-rows');
+    const reminderRecipientsContainer = document.getElementById('reminder-recipients-rows');
+    reportRecipientsContainer.innerHTML = '';
+    reminderRecipientsContainer.innerHTML = '';
+    (reportSettings.reportRecipients || []).forEach((e) => reportRecipientsContainer.appendChild(buildEmailRow(e)));
+    (reportSettings.reminderRecipients || []).forEach((e) => reminderRecipientsContainer.appendChild(buildEmailRow(e)));
+  }
+
+  document.getElementById('add-report-recipient-btn').addEventListener('click', () => {
+    document.getElementById('report-recipients-rows').appendChild(buildEmailRow(''));
+  });
+  document.getElementById('add-reminder-recipient-btn').addEventListener('click', () => {
+    document.getElementById('reminder-recipients-rows').appendChild(buildEmailRow(''));
+  });
+
+  document.getElementById('save-report-settings-btn').addEventListener('click', async () => {
+    const settings = {
+      reportTabs: Array.from(document.querySelectorAll('#report-tabs-checks input:checked')).map((c) => c.value),
+      hiddenTabs: Array.from(document.querySelectorAll('#hidden-tabs-checks input:checked')).map((c) => c.value),
+      reportRecipients: Array.from(document.querySelectorAll('#report-recipients-rows input')).map((i) => i.value.trim()).filter(Boolean),
+      reminderRecipients: Array.from(document.querySelectorAll('#reminder-recipients-rows input')).map((i) => i.value.trim()).filter(Boolean),
+    };
+    await saveSection('save-report-settings-btn', 'report-settings-err', 'report-settings-ok', () => window.statusApp.saveReportSettings(settings));
+    reportSettings = settings;
+    // Field Types / Categories above build their Tab dropdowns/checkboxes
+    // from liveTabs — keep it in sync so a tab just hidden (or un-hidden)
+    // here is reflected the next time either of those adds a new row,
+    // without needing a full reload.
+    liveTabs = allTabs.filter((t) => !settings.hiddenTabs.includes(t));
   });
 
   document.getElementById('close-btn').addEventListener('click', () => window.close());

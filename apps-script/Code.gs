@@ -32,8 +32,9 @@
  * time the widget asks for the tab list, so people can log their own
  * leave/holiday/WFH days out of the box. New tabs — Leave included — show
  * up in the widget automatically too, but the compiled weekly report only
- * ever pulls from REPORT_TABS below; add a tab's name there yourself if
- * you want it folded into the report as well.
+ * ever pulls from _Config's ReportTabs (see getReportTabs()); add a tab's
+ * name there — via the Sheet or the widget's "Manage Fields & Options"
+ * screen — if you want it folded into the report as well.
  *
  * Which fields get a dropdown/date-picker/multiselect/etc. — and each
  * dropdown's actual choices — are NOT hardcoded in the widget either:
@@ -82,16 +83,14 @@ function getScriptPropList_(key) {
 // value in the widget's config.json / config.template.json.
 var SHARED_SECRET = getScriptProp_('SHARED_SECRET');
 
-// Who gets the Friday reminder + the final compiled report. Comma-
-// separated in the SCRIPT_PROPERTIES value; add/remove addresses any
-// time there — no redeploy needed.
-var REPORT_RECIPIENTS = getScriptPropList_('REPORT_RECIPIENTS');
-
-// Optional separate list for just the Friday reminder — set a
-// REMINDER_RECIPIENTS Script Property only if you want it to differ from
-// REPORT_RECIPIENTS; leave it unset to reuse the same list (the common case).
-var REMINDER_RECIPIENTS_OVERRIDE_ = getScriptPropList_('REMINDER_RECIPIENTS');
-var REMINDER_RECIPIENTS = REMINDER_RECIPIENTS_OVERRIDE_.length ? REMINDER_RECIPIENTS_OVERRIDE_ : REPORT_RECIPIENTS;
+// Who gets the Friday reminder + the final compiled report. Editable from
+// _Config (ReportRecipients/ReminderRecipients — see getReportRecipients()
+// / getReminderRecipients() near ensureConfigTab()) or the widget's
+// in-app "Manage Fields & Options" screen; the REPORT_RECIPIENTS /
+// REMINDER_RECIPIENTS Script Properties below are the ORIGINAL mechanism
+// (this repo is public, so these could never be hardcoded here directly —
+// see the comment above) and still work as a fallback for any deployment
+// that hasn't moved to _Config for this yet.
 
 // Optional: a Microsoft Teams "Incoming Webhook" URL for a channel, if you
 // want the Friday reminder posted to Teams as well as emailed. Leave blank
@@ -110,19 +109,21 @@ var TIMESTAMP_COLUMN = 'Timestamp';
 var REPORT_DATE_COLUMN = 'Date';
 
 // Names of tabs to exclude from the widget's tab list (besides any
-// starting with "_", which are always excluded). This one has cumulative
-// formulas, not per-entry data, so it doesn't belong in the input flow —
-// it's still emailed as-is if you reference it manually, just never shown
-// as a "log an entry" choice.
-var HIDDEN_TABS = ['Weekly_Monthly_Summary'];
+// starting with "_", which are always excluded) — e.g. a tab with
+// cumulative formulas, not per-entry data, that doesn't belong in the
+// input flow (still emailed as-is if you reference it manually, just
+// never shown as a "log an entry" choice). Editable from _Config's
+// HiddenTabs row, or the in-app "Manage Fields & Options" screen — see
+// getHiddenTabs() near ensureConfigTab().
 
 // Tabs actually pulled into the compiled weekly report (email + download)
 // — an explicit allowlist, deliberately NOT "whatever tabs happen to be
 // visible in the widget right now". New tabs (Leave, or anything else you
 // or the team add later) show up in the widget just fine without being
 // added here — they just don't show up IN the report unless you
-// explicitly opt them in by adding their name to this list.
-var REPORT_TABS = ['Daily Status', 'Adhoc_Mails', 'Cleanup_Activities', 'Drupal_Bugs_&_Improvements'];
+// explicitly opt them in. Editable from _Config's ReportTabs row, or the
+// in-app "Manage Fields & Options" screen — see getReportTabs() near
+// ensureConfigTab().
 
 // How long tabs/columns responses are cached (seconds). Higher = faster
 // widget, but slower to notice a newly added tab/column. Run clearCache()
@@ -199,6 +200,12 @@ function doGet(e) {
     if (action === 'categories') {
       return jsonOut({ ok: true, categories: cached('categories', getCategoriesMap) });
     }
+    // Deliberately NOT a doGet action like tabs/options/fieldSchema/
+    // categories above, even though it's a read — those return tab
+    // structure or (at most) first names; this one returns real email
+    // addresses, and doGet has no token check at all (see its comment).
+    // getReportSettings lives in doPost below instead, gated by the same
+    // SHARED_SECRET check every write already goes through.
     return jsonOut({ ok: true, message: 'Status Report Tracker Agent API is running.' });
   } catch (err) {
     return jsonOut({ ok: false, error: String(err) });
@@ -239,8 +246,8 @@ function doPost(e) {
       // of hardcoded now), so letting `to` be attacker-controlled would
       // turn this into a way to mail the full report — attachment
       // included — to any outside address using nothing but that token.
-      if (REPORT_RECIPIENTS.indexOf(body.to) === -1) {
-        return jsonOut({ ok: false, error: '"to" must be one of REPORT_RECIPIENTS.' });
+      if (getReportRecipients().indexOf(body.to) === -1) {
+        return jsonOut({ ok: false, error: '"to" must be one of the current report recipients.' });
       }
       var testRange = parseRangeFromRequest(body) || getCurrentWeekRange();
       var testBuilt = buildReportBlob(testRange);
@@ -299,6 +306,62 @@ function doPost(e) {
       } finally {
         writeLock.releaseLock();
       }
+    }
+
+    /** Read-side of Report Settings (ReportTabs/HiddenTabs/
+     * ReportRecipients/ReminderRecipients — see ensureConfigDefaults_()).
+     * A POST, not a doGet action like tabs/options/fieldSchema/categories
+     * — see the comment on this action's absence from doGet above; email
+     * addresses are more sensitive than doGet's unauthenticated reads
+     * elsewhere are comfortable exposing. Returns the RAW _Config values,
+     * not the resolved (with-Script-Properties-fallback) ones getReportRecipients()/
+     * getReminderRecipients() use when actually sending mail — so the
+     * editor UI shows a field genuinely blank when nothing's set there
+     * yet, rather than looking pre-filled with a value that isn't really
+     * stored in the sheet. */
+    if (body.action === 'getReportSettings') {
+      // Every real tab except internal "_"-prefixed ones — deliberately
+      // NOT listVisibleTabs()/getTabs(), which also excludes anything
+      // already in HiddenTabs. This screen needs to see (and let you
+      // un-hide) a currently-hidden tab, which the widget's normal tab
+      // list can never show you in the first place.
+      var allTabs = SpreadsheetApp.getActiveSpreadsheet()
+        .getSheets()
+        .map(function (s) { return s.getName(); })
+        .filter(function (name) { return name.indexOf('_') !== 0; });
+      return jsonOut({
+        ok: true,
+        allTabs: allTabs,
+        reportSettings: {
+          reportTabs: getReportTabs(),
+          hiddenTabs: getHiddenTabs(),
+          reportRecipients: getConfigList_('ReportRecipients'),
+          reminderRecipients: getConfigList_('ReminderRecipients'),
+        },
+      });
+    }
+
+    /** Write-side — same "replace the whole thing" shape as saveOptions/
+     * saveFieldSchema/saveCategories above. HiddenTabs affects the tab
+     * list, so its cache key is cleared too (the others don't feed any
+     * cached('...') read here, but clearing 'tabs' is cheap and correct
+     * either way). */
+    if (body.action === 'saveReportSettings') {
+      var reportLock = LockService.getScriptLock();
+      if (!reportLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        var settings = body.settings || {};
+        setConfigValue('ReportTabs', (settings.reportTabs || []).join(', '));
+        setConfigValue('HiddenTabs', (settings.hiddenTabs || []).join(', '));
+        setConfigValue('ReportRecipients', (settings.reportRecipients || []).join(', '));
+        setConfigValue('ReminderRecipients', (settings.reminderRecipients || []).join(', '));
+      } finally {
+        reportLock.releaseLock();
+      }
+      CacheService.getScriptCache().remove('tabs');
+      return jsonOut({ ok: true, message: 'Report settings saved.' });
     }
 
     /** Called by the build-release CI workflow right after it publishes a
@@ -398,15 +461,21 @@ function authorizeApis() {
 
 /**
  * Run this ONCE from the editor (select it in the function dropdown,
- * click Run) after pasting your real values into the three lines below —
- * saves them into this project's Script Properties, which is where
- * SHARED_SECRET / REPORT_RECIPIENTS / REMINDER_RECIPIENTS actually live
- * from then on (see the CONFIG section up top). Safe to re-run any time
- * you want to rotate the token or update who gets emailed — this
- * overwrites, it doesn't append. You can also skip this function
- * entirely and edit the same three properties directly under Project
- * Settings > Script Properties, if you'd rather not have the values
- * pasted into a function body at all, even briefly and un-committed.
+ * click Run) after pasting your real values into the lines below — saves
+ * them into this project's Script Properties, which is where
+ * SHARED_SECRET lives from then on (see the CONFIG section up top; it has
+ * no sheet-editable equivalent — a token that lived in a sheet cell would
+ * defeat its own purpose). REPORT_RECIPIENTS/REMINDER_RECIPIENTS here are
+ * now OPTIONAL — recipients can be set directly on _Config's
+ * ReportRecipients/ReminderRecipients instead (Sheet or the widget's
+ * "Manage Fields & Options" screen — see getReportRecipients()), which is
+ * the easier path going forward. These two Script Properties still work
+ * as a fallback for a deployment that set them up before that existed.
+ * Safe to re-run any time you want to rotate the token — this overwrites,
+ * it doesn't append. You can also skip this function entirely and edit
+ * the same properties directly under Project Settings > Script
+ * Properties, if you'd rather not have the values pasted into a function
+ * body at all, even briefly and un-committed.
  *
  * IMPORTANT: after running this, delete/blank the pasted values below
  * again before you save/commit this file anywhere — the whole point is
@@ -507,7 +576,7 @@ function sendFridayReminder() {
     ss.getUrl() + '\n\n' +
     'The completed sheet goes out automatically at 11pm.\n';
 
-  REMINDER_RECIPIENTS.forEach(function (addr) {
+  getReminderRecipients().forEach(function (addr) {
     MailApp.sendEmail(addr, subject, body);
   });
 
@@ -533,10 +602,11 @@ function buildReportBlob(range) {
   var tempName = ss.getName() + ' — ' + formatRangeLabel(range);
 
   var temp = SpreadsheetApp.create(tempName);
-  // REPORT_TABS, not listVisibleTabsUncached() — the report is scoped to
-  // an explicit list of real tabs, not "whatever's visible in the widget
-  // right now" (filtered defensively in case one's been renamed/removed).
-  var tabNames = REPORT_TABS.filter(function (name) { return !!getSheetByName(name); });
+  // getReportTabs(), not listVisibleTabsUncached() — the report is scoped
+  // to an explicit list of real tabs, not "whatever's visible in the
+  // widget right now" (filtered defensively in case one's been
+  // renamed/removed).
+  var tabNames = getReportTabs().filter(function (name) { return !!getSheetByName(name); });
   var counts = []; // [{tab, count}, ...] in the same order as tabNames — used by the email body
 
   tabNames.forEach(function (tabName, i) {
@@ -581,7 +651,7 @@ function formatRangeLabel(range) {
 /**
  * Emails the report for `range` (defaults to the current Mon-Fri work week —
  * this is what the Friday 11pm trigger calls with no argument) to
- * REPORT_RECIPIENTS.
+ * getReportRecipients().
  */
 function compileAndSendReport(range) {
   range = range || getCurrentWeekRange();
@@ -590,7 +660,7 @@ function compileAndSendReport(range) {
   var subject = 'Status Report — ' + formatRangeLabel(range);
   var sheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
 
-  REPORT_RECIPIENTS.forEach(function (addr) {
+  getReportRecipients().forEach(function (addr) {
     MailApp.sendEmail({
       to: addr,
       subject: subject,
@@ -718,11 +788,12 @@ function listVisibleTabsUncached() {
   ensureFieldSchemaTab();
   ensureCategoriesTab();
   ensureFeaturesTab();
+  var hiddenTabs = getHiddenTabs();
   return SpreadsheetApp.getActiveSpreadsheet()
     .getSheets()
     .map(function (s) { return s.getName(); })
     .filter(function (name) {
-      return name.indexOf('_') !== 0 && HIDDEN_TABS.indexOf(name) === -1;
+      return name.indexOf('_') !== 0 && hiddenTabs.indexOf(name) === -1;
     });
 }
 
@@ -730,8 +801,9 @@ function listVisibleTabsUncached() {
 // _Config/_Holidays) so it shows up in the widget's tab list like any
 // other "log an entry" category, letting people log their own leave/
 // holiday/WFH days without you having to set the tab up by hand first.
-// Deliberately not in REPORT_TABS: it's the same shape of data as
-// everything else, it just isn't part of the weekly work report.
+// Deliberately not in _Config's ReportTabs by default: it's the same
+// shape of data as everything else, it just isn't part of the weekly work
+// report unless you explicitly add it there.
 var LEAVE_TAB_NAME = 'Leave';
 
 /** Created once, the first time anything asks for the tab list, if it
@@ -1118,7 +1190,7 @@ function writeCategoriesMap(map) {
 // stays in sync with whatever this function actually knows how to
 // document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
-var FEATURES_GUIDE_VERSION = '4';
+var FEATURES_GUIDE_VERSION = '5';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1169,7 +1241,22 @@ function ensureFeaturesTab() {
     [
       'Add a brand-new tab (a whole new kind of entry)',
       '1. Right-click the tabs bar in Sheets -> Insert sheet.\n2. Name it, then put your column headers in row 1.',
-      "Shows up in the widget automatically. To fold it into the Friday emailed report too, add its exact name to REPORT_TABS in Code.gs (still a code change).",
+      "Shows up in the widget automatically. To fold it into the Friday emailed report too, add its exact name to _Config's ReportTabs (see the row below) — or use the app's \"Manage Fields & Options\" screen.",
+    ],
+    [
+      'Choose which tabs feed the Friday report',
+      '1. Open _Config.\n2. Edit the ReportTabs row: comma-separated exact tab names.',
+      'Or use the app\'s "Manage Fields & Options" -> Report Settings, which shows checkboxes instead of typed names.',
+    ],
+    [
+      'Hide a tab from the app (still usable directly in the Sheet)',
+      '1. Open _Config.\n2. Edit the HiddenTabs row: comma-separated exact tab names.',
+      'Same "Report Settings" screen in the app covers this too. A hidden tab can still be in ReportTabs — hiding it from the app and including it in the report are independent.',
+    ],
+    [
+      'Change who gets the report / Friday reminder emails',
+      '1. Open _Config.\n2. Edit ReportRecipients and/or ReminderRecipients: comma-separated emails.',
+      'Leave ReminderRecipients blank to reuse ReportRecipients. Also settable from the app\'s "Manage Fields & Options" -> Report Settings.',
     ],
     [
       'See your changes in the app right away',
@@ -1177,8 +1264,8 @@ function ensureFeaturesTab() {
       'Otherwise changes show up on their own within ~5 minutes (CACHE_SECONDS) — the cache is why a change can look like it "didn\'t work" for a few minutes.',
     ],
     [
-      "What's still a code change (not sheet-editable)",
-      '- Which tabs count toward the Friday report (REPORT_TABS)\n- Who gets the report/reminder emails (Script Properties)\n- The shared connection token/password',
+      "What's still a code change (not sheet- or app-editable)",
+      '- Reminder schedule (day/time) — see setupTriggers() in Code.gs\n- Adding a genuinely new field Type beyond the ones listed below\n- Rotating SHARED_SECRET itself (the token value the app connects with is set from the app — see the comparison table)',
       'Ask whoever set up the backend for these.',
     ],
     ['— Field Types (_FieldSchema "Type" column) —', '', ''],
@@ -1250,11 +1337,13 @@ function writeSheetVsAppTable_(sheet) {
     ['Add / edit / delete a dropdown option', 'Yes', 'Yes'],
     ["Add / edit / delete a field's Type", 'Yes', 'Yes'],
     ['Add / edit / delete a category', 'Yes', 'Yes'],
+    ['Choose which tabs feed the Friday report', 'Yes', 'Yes'],
+    ['Hide a tab from the app', 'Yes', 'Yes'],
+    ['Change who gets report/reminder emails', 'Yes', 'Yes'],
     ['Create a brand-new tab', 'Yes', 'No'],
     ['Rename or delete an existing tab', 'Yes', 'No'],
-    ['Choose which tabs feed the Friday report', 'Code change', 'Code change'],
-    ['Change who gets report/reminder emails', 'Code change', 'No'],
     ['Change the connection token / admin password', 'No', 'Yes'],
+    ['Reminder schedule (day/time) and holidays', 'Code change', 'Code change'],
   ];
 
   var values = [header].concat(data);
@@ -1340,14 +1429,43 @@ function ensureConfigTab() {
   var sheet = ss.getSheetByName(CONFIG_TAB_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG_TAB_NAME);
-    sheet.getRange(1, 1, 3, 2).setValues([
-      ['Key', 'Value'],
-      ['LatestVersion', '1.1.0'],
-      ['DownloadUrl', ''],
-    ]);
+    sheet.getRange(1, 1, 1, 2).setValues([['Key', 'Value']]);
     sheet.hideSheet();
   }
+  ensureConfigDefaults_(sheet);
   return sheet;
+}
+
+/** Adds any of these keys that are missing — never touches one that's
+ * already there, even if its value is blank (blank can be deliberate,
+ * e.g. "use the Script Properties fallback"). Runs on every
+ * ensureConfigTab() call, so an existing deployment (this one included)
+ * migrates in place the first time this runs after a key was added here,
+ * without touching anything already on the tab. ReportTabs/HiddenTabs
+ * only seed with this app's original hardcoded values for the specific
+ * tab names that already exist in THIS spreadsheet — same non-destructive-
+ * migration pattern as ensureFieldSchemaTab()/ensureCategoriesTab(), so a
+ * brand-new organization gets an honest blank instead of another org's
+ * tab names. */
+function ensureConfigDefaults_(sheet) {
+  var existingTabNames = SpreadsheetApp.getActiveSpreadsheet().getSheets().map(function (s) { return s.getName(); });
+  function migratedTabList_(names) {
+    return names.filter(function (n) { return existingTabNames.indexOf(n) !== -1; }).join(', ');
+  }
+  var defaults = [
+    ['LatestVersion', '1.1.0'],
+    ['DownloadUrl', ''],
+    ['ReportTabs', migratedTabList_(['Daily Status', 'Adhoc_Mails', 'Cleanup_Activities', 'Drupal_Bugs_&_Improvements'])],
+    ['HiddenTabs', migratedTabList_(['Weekly_Monthly_Summary'])],
+    ['ReportRecipients', ''],
+    ['ReminderRecipients', ''],
+  ];
+  var data = sheet.getDataRange().getValues();
+  var existingKeys = data.slice(1).map(function (r) { return String(r[0]).trim(); });
+  var toAdd = defaults.filter(function (d) { return existingKeys.indexOf(d[0]) === -1; });
+  if (toAdd.length) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, toAdd.length, 2).setValues(toAdd);
+  }
 }
 
 /** Bump LatestVersion (and DownloadUrl) in the _Config tab whenever you cut
@@ -1361,6 +1479,58 @@ function getConfigValue(key) {
     if (String(data[i][0]).trim() === key) return data[i][1];
   }
   return '';
+}
+
+/** Sets a _Config key's value, adding the row if it somehow doesn't exist
+ * yet (shouldn't normally happen — ensureConfigDefaults_ seeds every known
+ * key). Used by the widget's in-app "Manage Fields & Options" screen. */
+function setConfigValue(key, value) {
+  var sheet = ensureConfigTab();
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]).trim() === key) {
+      sheet.getRange(i + 1, 2).setValue(value);
+      return;
+    }
+  }
+  sheet.getRange(sheet.getLastRow() + 1, 1, 1, 2).setValues([[key, value]]);
+}
+
+function getConfigList_(key) {
+  return String(getConfigValue(key)).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+}
+
+/** _Config's HiddenTabs — see the comment above HIDDEN_TABS' old
+ * definition near the top of this file. */
+function getHiddenTabs() {
+  return getConfigList_('HiddenTabs');
+}
+
+/** _Config's ReportTabs — see the comment above REPORT_TABS' old
+ * definition near the top of this file. */
+function getReportTabs() {
+  return getConfigList_('ReportTabs');
+}
+
+/** _Config's ReportRecipients if set, else the original REPORT_RECIPIENTS
+ * Script Property (kept working for any deployment that hasn't moved to
+ * _Config for this yet). */
+function getReportRecipients() {
+  var fromSheet = getConfigList_('ReportRecipients');
+  if (fromSheet.length) return fromSheet;
+  return getScriptPropList_('REPORT_RECIPIENTS');
+}
+
+/** _Config's ReminderRecipients if set, else the REMINDER_RECIPIENTS
+ * Script Property override if set, else whatever getReportRecipients()
+ * resolves to — same three-tier fallback the Script-Properties-only
+ * mechanism always had, just with _Config checked first now. */
+function getReminderRecipients() {
+  var fromSheet = getConfigList_('ReminderRecipients');
+  if (fromSheet.length) return fromSheet;
+  var override = getScriptPropList_('REMINDER_RECIPIENTS');
+  if (override.length) return override;
+  return getReportRecipients();
 }
 
 function jsonOut(obj) {

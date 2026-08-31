@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('statusApp', {
   saveOptions: (options) => ipcRenderer.invoke('save-options', options),
   saveFieldSchema: (fieldSchema) => ipcRenderer.invoke('save-field-schema', fieldSchema),
   saveCategories: (categories) => ipcRenderer.invoke('save-categories', categories),
+  getReportSettings: () => ipcRenderer.invoke('get-report-settings'),
+  saveReportSettings: (settings) => ipcRenderer.invoke('save-report-settings', settings),
   submitEntry: (tab, values) => ipcRenderer.invoke('submit-entry', { tab, values }),
   sendReportNow: (range) => ipcRenderer.invoke('send-report-now', range),
   downloadReport: (range) => ipcRenderer.invoke('download-report', range),

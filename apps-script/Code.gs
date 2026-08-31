@@ -1118,7 +1118,7 @@ function writeCategoriesMap(map) {
 // stays in sync with whatever this function actually knows how to
 // document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
-var FEATURES_GUIDE_VERSION = '3';
+var FEATURES_GUIDE_VERSION = '4';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1220,6 +1220,7 @@ function ensureFeaturesTab() {
   ];
 
   sheet.clearContents();
+  sheet.clearFormats();
   sheet.getRange(1, 1, rows.length, 3).setValues(rows);
   sheet.getRange(1, 1, 1, 3).setFontWeight('bold');
   sheet.setColumnWidths(1, 1, 220);
@@ -1228,6 +1229,54 @@ function ensureFeaturesTab() {
   sheet.getRange(2, 1, rows.length - 1, 3).setWrap(true);
   sheet.setFrozenRows(1);
   sheet.getRange(1, 1).setNote(FEATURES_GUIDE_VERSION);
+
+  writeSheetVsAppTable_(sheet);
+}
+
+// A color-coded "can I do this in the Sheet, or in the App?" table, placed
+// two columns to the right of the main guide (column E on) so both are
+// visible side by side without scrolling. Green = yes, that surface can do
+// it; amber = no, it's still a real code change either way (not a gap in
+// this feature — those things were never made editable from anywhere);
+// everything else is a plain, uncolored "No".
+function writeSheetVsAppTable_(sheet) {
+  var YES = '#d9ead3'; // soft green
+  var NO = '#f4cccc'; // soft red
+  var CODE = '#fce5cd'; // soft amber — "still a real code change", not a gap
+
+  var startCol = 5; // column E
+  var header = ['Where can I make this change?', 'In Sheet', 'In App'];
+  var data = [
+    ['Add / edit / delete a dropdown option', 'Yes', 'Yes'],
+    ["Add / edit / delete a field's Type", 'Yes', 'Yes'],
+    ['Add / edit / delete a category', 'Yes', 'Yes'],
+    ['Create a brand-new tab', 'Yes', 'No'],
+    ['Rename or delete an existing tab', 'Yes', 'No'],
+    ['Choose which tabs feed the Friday report', 'Code change', 'Code change'],
+    ['Change who gets report/reminder emails', 'Code change', 'No'],
+    ['Change the connection token / admin password', 'No', 'Yes'],
+  ];
+
+  var values = [header].concat(data);
+  var range = sheet.getRange(1, startCol, values.length, 3);
+  range.setValues(values);
+  sheet.getRange(1, startCol, 1, 3).setFontWeight('bold').setBackground('#6e1b2c').setFontColor('#ffffff');
+
+  var backgrounds = data.map(function (row) {
+    return ['#ffffff', colorFor_(row[1]), colorFor_(row[2])];
+  });
+  sheet.getRange(2, startCol, data.length, 3).setBackgrounds(backgrounds);
+  sheet.getRange(2, startCol + 1, data.length, 2).setHorizontalAlignment('center').setFontWeight('bold');
+  sheet.getRange(1, startCol, values.length, 3).setBorder(true, true, true, true, true, true, '#b7b7b7', SpreadsheetApp.BorderStyle.SOLID);
+
+  sheet.setColumnWidth(startCol, 300);
+  sheet.setColumnWidths(startCol + 1, 2, 110);
+
+  function colorFor_(v) {
+    if (v === 'Yes') return YES;
+    if (v === 'Code change') return CODE;
+    return NO;
+  }
 }
 
 function getSheetByName(name) {

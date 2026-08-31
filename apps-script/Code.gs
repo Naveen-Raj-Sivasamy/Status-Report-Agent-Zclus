@@ -52,6 +52,14 @@
  * guide to all of the above, written directly into the sheet for whoever's
  * editing it day to day — nothing reads it programmatically.
  *
+ * A "Weekly_Connect" tab is created automatically (see
+ * ensureWeeklyConnectTab()) the same way Leave is — tracks questions/
+ * issues raised through the week, posts a running list to Teams (if
+ * TEAMS_WEBHOOK_URL is set) scoped to the current Wed-to-Wed window, and
+ * supports editing a ticket's Status/Comments in place from the widget's
+ * "View & Update Tickets" screen — the one place in this app that edits
+ * an existing row instead of appending.
+ *
  * REQUIRED ONE-TIME SETUP: SHARED_SECRET and the recipient lists are NOT
  * hardcoded in this file (this repo is public — a committed secret/PII
  * would be readable by anyone). Run setupScriptProperties() once from the
@@ -92,11 +100,16 @@ var SHARED_SECRET = getScriptProp_('SHARED_SECRET');
 // see the comment above) and still work as a fallback for any deployment
 // that hasn't moved to _Config for this yet.
 
-// Optional: a Microsoft Teams "Incoming Webhook" URL for a channel, if you
-// want the Friday reminder posted to Teams as well as emailed. Leave blank
-// to skip Teams entirely. (Team > channel > Connectors > Incoming Webhook —
-// no admin/IT app registration needed for this, most tenants allow it.)
-var TEAMS_WEBHOOK_URL = '';
+// Optional: a Microsoft Teams "Incoming Webhook" URL for a channel — used
+// for the Friday reminder, and for Weekly Connect's running ticket post
+// (see postWeeklyConnectToTeams()). Leave unset to skip Teams entirely.
+// (Team > channel > Connectors > Incoming Webhook — no admin/IT app
+// registration needed for this, most tenants allow it.) A webhook URL is
+// itself a write capability (anyone with it can post to your channel), so
+// this lives in Script Properties like SHARED_SECRET, not hardcoded here —
+// set it via setupScriptProperties() or Project Settings > Script
+// Properties directly.
+var TEAMS_WEBHOOK_URL = getScriptProp_('TEAMS_WEBHOOK_URL');
 
 // Column name (must match a header in every tab) auto-filled with the
 // submission time, IF such a column exists. None of the current tabs have
@@ -199,6 +212,16 @@ function doGet(e) {
      * flat tab list, skip the category picker entirely". */
     if (action === 'categories') {
       return jsonOut({ ok: true, categories: cached('categories', getCategoriesMap) });
+    }
+    /** Every Weekly Connect ticket — powers the widget's "View & Update
+     * Tickets" screen. Deliberately NOT run through cached() like tabs/
+     * options/etc above: tickets change constantly (new ones logged
+     * through the week, Status/Comments edited every Wednesday), and
+     * someone opening this screen needs the real current state, not up to
+     * CACHE_SECONDS stale — the whole point of "pick a ticket to update"
+     * breaks if it's working from an outdated list. */
+    if (action === 'weeklyConnectTickets') {
+      return jsonOut({ ok: true, tickets: getWeeklyConnectTickets() });
     }
     // Deliberately NOT a doGet action like tabs/options/fieldSchema/
     // categories above, even though it's a read — those return tab
@@ -364,6 +387,30 @@ function doPost(e) {
       return jsonOut({ ok: true, message: 'Report settings saved.' });
     }
 
+    /** Updates one Weekly Connect ticket's Status/Comments in place — the
+     * one write in this whole app that edits an existing row instead of
+     * appending. Lock-guarded like every other write, so two people
+     * closing out the same ticket at once can't race each other. */
+    if (body.action === 'updateWeeklyConnectTicket') {
+      if (!body.ticketId) {
+        return jsonOut({ ok: false, error: 'Missing "ticketId".' });
+      }
+      var ticketLock = LockService.getScriptLock();
+      if (!ticketLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      var found;
+      try {
+        found = updateWeeklyConnectTicket(body.ticketId, body.status || '', body.comments || '');
+      } finally {
+        ticketLock.releaseLock();
+      }
+      if (!found) {
+        return jsonOut({ ok: false, error: 'Ticket "' + body.ticketId + '" not found.' });
+      }
+      return jsonOut({ ok: true, message: 'Ticket updated.' });
+    }
+
     /** Called by the build-release CI workflow right after it publishes a
      * new installer, so the widget's "update available" banner and its
      * DownloadUrl-driven "Get it" button stay in sync automatically. */
@@ -429,6 +476,13 @@ function doPost(e) {
     } finally {
       lock.releaseLock();
     }
+    // Outside the lock — a slow/unreachable Teams webhook shouldn't hold up
+    // anyone else's write. postWeeklyConnectToTeams() never throws (see its
+    // own comment), so a failed post here can't turn a successful save into
+    // an error response — the ticket is already safely on the sheet either way.
+    if (body.tab === WEEKLY_CONNECT_TAB_NAME) {
+      postWeeklyConnectToTeams();
+    }
     return jsonOut({ ok: true, message: 'Saved to "' + body.tab + '".' });
   } catch (err) {
     return jsonOut({ ok: false, error: String(err) });
@@ -486,6 +540,7 @@ function setupScriptProperties() {
     SHARED_SECRET: 'PASTE-A-NEW-RANDOM-SECRET-HERE',
     REPORT_RECIPIENTS: 'name1@example.com, name2@example.com',
     // REMINDER_RECIPIENTS: 'only-set-this-if-it-should-differ-from-REPORT_RECIPIENTS@example.com',
+    // TEAMS_WEBHOOK_URL: 'https://....webhook.office.com/...' — optional, only if you want Weekly Connect / the Friday reminder posted to Teams.
   });
   Logger.log('Script Properties saved. Blank the values above and re-run (or just leave this function alone) from now on.');
 }
@@ -787,6 +842,10 @@ function listVisibleTabsUncached() {
   ensureOptionsTab();
   ensureFieldSchemaTab();
   ensureCategoriesTab();
+  // Must come AFTER the three ensure*Tab() calls above — it merges into
+  // whatever they just seeded (or already had) via get/write*Map(), and
+  // running first would let its narrower write clobber their migration.
+  ensureWeeklyConnectTab();
   ensureFeaturesTab();
   var hiddenTabs = getHiddenTabs();
   return SpreadsheetApp.getActiveSpreadsheet()
@@ -852,6 +911,206 @@ function findLeaveDateConflict(headers, sheet, values) {
 function normalizeDateForCompare(raw, tz) {
   var d = raw instanceof Date ? raw : new Date(raw);
   return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+}
+
+// ------------------------- Weekly Connect ----------------------------
+
+// Name of the auto-created "Weekly Connect" tab — a normal, visible tab,
+// same self-creating pattern as ensureLeaveTab(). Tracks questions/issues
+// raised through the week and settled every Wednesday's CMS Weekly
+// Connect meeting. Unlike Daily Status/Leave/etc, this tab never existed
+// as hardcoded config in an older version of this app, so there's nothing
+// to "migrate" — ensureWeeklyConnectTab() seeds its own _FieldSchema/
+// _Options/_Categories rows itself, the first time it creates the tab.
+var WEEKLY_CONNECT_TAB_NAME = 'Weekly_Connect';
+var WEEKLY_CONNECT_COLUMNS = [
+  'Ticket ID', 'Date', 'Requester', 'Owner', 'Site', 'Type',
+  'Issue', 'URL', 'Attachment', 'Priority', 'Status', 'Comments',
+];
+
+/** Created once, the first time anything asks for the tab list, if it
+ * doesn't already exist. Never touches the tab again once it's there —
+ * same as ensureLeaveTab() — so renaming columns or adding your own is
+ * completely safe (just keep 'Ticket ID' and 'Status' if you want
+ * updateWeeklyConnectTicket()/the Teams post to keep working). */
+function ensureWeeklyConnectTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(WEEKLY_CONNECT_TAB_NAME)) return;
+  var sheet = ss.insertSheet(WEEKLY_CONNECT_TAB_NAME);
+  sheet.getRange(1, 1, 1, WEEKLY_CONNECT_COLUMNS.length).setValues([WEEKLY_CONNECT_COLUMNS]);
+  seedWeeklyConnectConfig_();
+}
+
+/** One-time seed of this tab's own field types/options/category, merged
+ * into whatever's already on _FieldSchema/_Options/_Categories (reuses
+ * the exact same write*Map() functions the in-app "Manage Fields &
+ * Options" screen uses, so this is just those same edits made
+ * automatically instead of by hand). Requester/Owner/Site reuse option
+ * lists that already exist elsewhere in the app (REQUESTERS/ASSIGNEES/
+ * SITES) rather than inventing new ones. */
+function seedWeeklyConnectConfig_() {
+  var fsMap = getFieldSchemaMap();
+  fsMap[WEEKLY_CONNECT_TAB_NAME] = {
+    'Ticket ID': { type: 'sequence' },
+    'Date': { type: 'date' },
+    'Requester': { type: 'select', optionsKey: 'REQUESTERS' },
+    'Owner': { type: 'select', optionsKey: 'ASSIGNEES' },
+    'Site': { type: 'select', optionsKey: 'SITES' },
+    'Type': { type: 'select', optionsKey: 'Weekly_Connect.Type' },
+    'Priority': { type: 'select', optionsKey: 'Weekly_Connect.Priority' },
+    'Status': { type: 'select', optionsKey: 'Weekly_Connect.Status' },
+  };
+  writeFieldSchemaMap(fsMap);
+
+  var optMap = getOptionsMap();
+  optMap['Weekly_Connect.Type'] = ['Bug', 'Question', 'Enhancement', 'Blocker'];
+  optMap['Weekly_Connect.Priority'] = ['Low', 'Medium', 'High', 'Urgent'];
+  optMap['Weekly_Connect.Status'] = ['Open', 'In Progress', 'Resolved', 'Deferred'];
+  writeOptionsMap(optMap);
+
+  var catMap = getCategoriesMap();
+  var existing = catMap['Weekly Connect'] || [];
+  if (existing.indexOf(WEEKLY_CONNECT_TAB_NAME) === -1) {
+    catMap['Weekly Connect'] = existing.concat([WEEKLY_CONNECT_TAB_NAME]);
+    writeCategoriesMap(catMap);
+  }
+}
+
+/** Every Weekly Connect ticket as a plain object per row, newest first —
+ * powers the widget's "View & Update Tickets" list (the same list also
+ * serves as the "open items" agenda view and the picker for
+ * updateWeeklyConnectTicket()). `stale` is true for anything still Open
+ * after STALE_TICKET_DAYS — a nudge, not a hard rule; nothing else changes
+ * about a stale ticket. */
+var STALE_TICKET_DAYS = 21;
+
+function getWeeklyConnectTickets() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(WEEKLY_CONNECT_TAB_NAME);
+  if (!sheet) return [];
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return [];
+
+  var headers = getHeaderRow(sheet);
+  var idIndex = findColumnIndex(headers, 'Ticket ID');
+  var dateIndex = findColumnIndex(headers, 'Date');
+  var statusIndex = findColumnIndex(headers, 'Status');
+  var tz = Session.getScriptTimeZone();
+  var staleBefore = new Date(Date.now() - STALE_TICKET_DAYS * 24 * 60 * 60 * 1000);
+
+  var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  var tickets = values.map(function (row) {
+    var ticket = {};
+    headers.forEach(function (h, i) {
+      var v = row[i];
+      ticket[h] = v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v;
+    });
+    var status = statusIndex === -1 ? '' : String(row[statusIndex]).trim();
+    var rawDate = dateIndex === -1 ? null : row[dateIndex];
+    var d = rawDate instanceof Date ? rawDate : new Date(rawDate);
+    ticket.stale = status === 'Open' && !isNaN(d.getTime()) && d < staleBefore;
+    return ticket;
+  });
+
+  if (idIndex !== -1) {
+    tickets.sort(function (a, b) { return Number(b['Ticket ID']) - Number(a['Ticket ID']); });
+  } else {
+    tickets.reverse();
+  }
+  return tickets;
+}
+
+/** Finds the row for `ticketId` and overwrites its Status/Comments cells
+ * in place — the one place in this whole app that edits an existing row
+ * rather than appending. Only ever called while already holding the
+ * write lock (see doPost), same as every other write. Returns false (no
+ * throw) if the ticket ID isn't found, so the caller can return a clean
+ * error instead of a stack trace. */
+function updateWeeklyConnectTicket(ticketId, status, comments) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(WEEKLY_CONNECT_TAB_NAME);
+  if (!sheet) return false;
+  var headers = getHeaderRow(sheet);
+  var idIndex = findColumnIndex(headers, 'Ticket ID');
+  var statusIndex = findColumnIndex(headers, 'Status');
+  var commentsIndex = findColumnIndex(headers, 'Comments');
+  if (idIndex === -1) return false;
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return false;
+  var ids = sheet.getRange(2, idIndex + 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]).trim() === String(ticketId).trim()) {
+      var row = i + 2;
+      if (statusIndex !== -1) sheet.getRange(row, statusIndex + 1).setValue(status);
+      if (commentsIndex !== -1) sheet.getRange(row, commentsIndex + 1).setValue(comments);
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The current "connect week" window: the 7 days ending on the most
+ * recent Wednesday at/before today (so on a Wednesday itself, today is
+ * included — the meeting day's own late-breaking tickets still show).
+ * Used to scope the Teams post to just this week's tickets, not the
+ * tab's entire history — see postWeeklyConnectToTeams(). */
+function getCurrentConnectWeekRange() {
+  var tz = Session.getScriptTimeZone();
+  var now = new Date();
+  var todayStr = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  var today = new Date(todayStr + 'T00:00:00');
+  var WEDNESDAY = 3;
+  var daysSinceWednesday = (today.getDay() - WEDNESDAY + 7) % 7;
+  var weekEnd = new Date(today);
+  weekEnd.setDate(today.getDate() - daysSinceWednesday);
+  var weekStart = new Date(weekEnd);
+  weekStart.setDate(weekEnd.getDate() - 6);
+  return { start: weekStart, end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59, 59) };
+}
+
+/** Posts (as a fresh message — see the comment on TEAMS_WEBHOOK_URL/the
+ * Weekly Connect plan for why this isn't a truly edited single message)
+ * every ticket raised in the current connect week. Silently no-ops if
+ * TEAMS_WEBHOOK_URL isn't set — Weekly Connect works fine without Teams,
+ * same as the Friday reminder does. Never throws: a Teams outage should
+ * never take down the actual save, which is why doPost calls this AFTER
+ * appendRow already succeeded, in its own try/catch. */
+function postWeeklyConnectToTeams() {
+  if (!TEAMS_WEBHOOK_URL) return;
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(WEEKLY_CONNECT_TAB_NAME);
+  if (!sheet) return;
+
+  var range = getCurrentConnectWeekRange();
+  var tickets = getWeeklyConnectTickets().filter(function (t) {
+    // 'T00:00:00' (no zone suffix) forces local-time parsing — a bare
+    // 'yyyy-MM-dd' string parses as UTC midnight instead, which silently
+    // shifts a day backward once compared against range.start/end (built
+    // in the script's own timezone) for any negative-UTC-offset org.
+    var d = new Date(t['Date'] + 'T00:00:00');
+    return !isNaN(d.getTime()) && d >= range.start && d <= range.end;
+  });
+  // Oldest first within the week, so the list reads top-to-bottom in the
+  // order tickets actually came in.
+  tickets.reverse();
+
+  var tz = Session.getScriptTimeZone();
+  var weekLabel = Utilities.formatDate(range.start, tz, 'MMM d') + ' – ' + Utilities.formatDate(range.end, tz, 'MMM d');
+  var lines = tickets.map(function (t) {
+    var who = t['Requester'] ? ' — ' + t['Requester'] : '';
+    return '**Q' + t['Ticket ID'] + '**: ' + (t['Issue'] || '(no description)') + who;
+  });
+  var text = '**CMS Weekly Connect — week of ' + weekLabel + '**\n\n' +
+    (lines.length ? lines.join('\n\n') : '_Nothing logged yet this week._');
+
+  try {
+    UrlFetchApp.fetch(TEAMS_WEBHOOK_URL, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ text: text }),
+      muteHttpExceptions: true,
+    });
+  } catch (err) {
+    Logger.log('postWeeklyConnectToTeams failed: ' + err);
+  }
 }
 
 function listVisibleTabs() {
@@ -1190,7 +1449,7 @@ function writeCategoriesMap(map) {
 // stays in sync with whatever this function actually knows how to
 // document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
-var FEATURES_GUIDE_VERSION = '6';
+var FEATURES_GUIDE_VERSION = '7';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1262,6 +1521,11 @@ function ensureFeaturesTab() {
       'See your changes in the app right away',
       '1. Open the app -> Settings -> "Refresh tabs & fields (clear cache)".',
       'Otherwise changes show up on their own within ~5 minutes (CACHE_SECONDS) — the cache is why a change can look like it "didn\'t work" for a few minutes.',
+    ],
+    [
+      'Weekly Connect: log a ticket / update one',
+      '1. Widget -> Weekly Connect category -> Weekly_Connect -> fill the form to log a new one.\n2. From that same screen, "View & update tickets" -> pick one -> set Status/Comments -> Save.',
+      "New tickets auto-post to Teams (if TEAMS_WEBHOOK_URL is set — see Script Properties) as a running list scoped to the current Wed-to-Wed week. Status/Comments are the one thing in this whole app that edits an existing row instead of appending.",
     ],
     [
       "What's still a code change (not sheet- or app-editable)",

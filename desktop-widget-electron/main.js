@@ -397,6 +397,15 @@ ipcMain.handle('save-report-settings', async (_e, settings) => {
   tabsCache = null; // HiddenTabs can change which tabs the widget shows
   return result;
 });
+// Weekly Connect's ticket list — same reasoning as report settings above
+// for going through GET on the backend, not a doPost round-trip: it's a
+// plain GET action there (see Code.gs), fetched fresh every time this
+// screen opens rather than cached, since "pick a ticket to update" needs
+// the real current state.
+ipcMain.handle('get-weekly-connect-tickets', async () => apiGet({ action: 'weeklyConnectTickets' }));
+ipcMain.handle('update-weekly-connect-ticket', async (_e, { ticketId, status, comments }) =>
+  apiPostBody({ action: 'updateWeeklyConnectTicket', ticketId, status, comments })
+);
 ipcMain.handle('download-report', async (_e, range) => {
   const data = await apiPostBody(Object.assign({ action: 'downloadReport' }, range || {}));
   const { canceled, filePath } = await dialog.showSaveDialog({

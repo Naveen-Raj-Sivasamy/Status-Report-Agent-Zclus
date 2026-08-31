@@ -41,19 +41,18 @@ came in (the script fills it in automatically; leave it out of the form).
 3. Project Settings (gear icon) → check **"Show appsscript.json manifest
    file in editor"** → open `appsscript.json` and replace it with
    [`apps-script/appsscript.json`](apps-script/appsscript.json).
-4. `TEAMS_WEBHOOK_URL` in the CONFIG block is the one thing still edited
-   directly in `Code.gs` (optional, see below) — `SHARED_SECRET` and
-   `REPORT_RECIPIENTS` are NOT: this repo is public, so hardcoding a real
-   token/email list here would mean anyone on the internet could read
-   them. Instead:
+4. Nothing sensitive is hardcoded in `Code.gs` — this repo is public, so a
+   real token/email list/webhook URL here would mean anyone on the
+   internet could read it. Instead:
    - In the function dropdown, select **`setupScriptProperties`**, paste
-     your real secret and recipient list into the three lines inside it,
-     click **Run**, then delete those pasted values again (that function's
-     own comment explains why). `SHARED_SECRET` is your `TOKEN`.
+     your real values into the lines inside it, click **Run**, then delete
+     those pasted values again (that function's own comment explains why).
+     `SHARED_SECRET` is your `TOKEN`.
    - Or skip that function entirely and set `SHARED_SECRET` /
-     `REPORT_RECIPIENTS` (comma-separated) / `REMINDER_RECIPIENTS`
-     directly under **Project Settings → Script Properties** — same
-     effect, without ever pasting real values into a function body.
+     `REPORT_RECIPIENTS` (comma-separated) / `REMINDER_RECIPIENTS` /
+     `TEAMS_WEBHOOK_URL` directly under **Project Settings → Script
+     Properties** — same effect, without ever pasting real values into a
+     function body.
    - The API refuses every write with "Invalid token" until `SHARED_SECRET`
      is actually set this way — that's deliberate (fails closed, not open).
 5. **Deploy → New deployment → Web app**.
@@ -70,11 +69,17 @@ Whenever you edit `Code.gs` later, **redeploy** (Deploy → Manage
 deployments → edit → new version) — editing the script alone doesn't
 update a live Web App deployment.
 
-### Optional: Teams reminder
+### Optional: Teams reminder + Weekly Connect
 
 In your Teams channel: **⋯ → Connectors → Incoming Webhook** → name it,
-copy the URL, paste into `TEAMS_WEBHOOK_URL`. No admin approval needed on
-most tenants for this (unlike a full Azure app registration).
+copy the URL, set it as the `TEAMS_WEBHOOK_URL` Script Property (see step 4
+above). No admin approval needed on most tenants for this (unlike a full
+Azure app registration). Used for the Friday reminder, and — if you also
+use the **Weekly Connect** tab (auto-created, tracks questions/issues
+raised through the week for a recurring sync meeting) — a running list of
+this week's tickets, reposted fresh each time a new one's logged, reset
+every Wednesday. See the `_Features` sheet tab for the full how-to once
+it's running.
 
 ## 3. Configure and run the desktop widget
 

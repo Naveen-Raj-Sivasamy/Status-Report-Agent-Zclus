@@ -491,6 +491,38 @@ function checkForUpdatesInBackground() {
   });
 }
 
+// electron-updater caches the downloaded installer at
+// %LocalAppData%\status-update-widget-updater\pending\ and only ever
+// keeps ONE at a time (it wipes that folder itself before starting a
+// different version's download) — so this never grows unbounded across
+// releases. The one gap: it doesn't delete that cached installer the
+// moment install succeeds, only lazily, the next time a newer version is
+// found. Close that gap explicitly: if the version running right now is
+// different from the one we saw last launch, an update just landed
+// (auto or manual) and that cached copy has served its purpose — clear it.
+function cleanStaleUpdaterCacheIfVersionChanged() {
+  if (process.platform !== 'win32') return;
+  try {
+    const saved = loadUserConfig();
+    const currentVersion = app.getVersion();
+    if (saved.lastSeenVersion !== currentVersion) {
+      // Mirrors electron-updater's own AppAdapter.getAppCacheDir() exactly
+      // (LOCALAPPDATA, not the Roaming APPDATA app.getPath('appData') gives
+      // you) so this always points at the same folder it actually uses.
+      const cacheDir = path.join(
+        process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local'),
+        `${app.getName()}-updater`
+      );
+      fs.rm(cacheDir, { recursive: true, force: true }, () => {
+        /* best-effort — nothing depends on this succeeding */
+      });
+      saveUserConfig({ lastSeenVersion: currentVersion });
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
 ipcMain.handle('is-update-ready-to-install', () => updateReadyToInstall);
 ipcMain.handle('quit-and-install', () => {
   if (updateReadyToInstall) autoUpdater.quitAndInstall();
@@ -949,6 +981,7 @@ function startMainApp() {
   popup = createPopup();
   floatBtn = createFloatButton();
 
+  cleanStaleUpdaterCacheIfVersionChanged(); // clear out any installer left over from the update that got us to this version
   checkForUpdatesInBackground(); // once at launch...
   setInterval(checkForUpdatesInBackground, 4 * 60 * 60 * 1000); // ...and every 4 hours after, for anyone who leaves the app running for days
 }

@@ -22,4 +22,9 @@ contextBridge.exposeInMainWorld('statusApp', {
   resizeWindow: (height) => ipcRenderer.send('resize-window', height),
   moveFloatBtnBy: (dx, dy) => ipcRenderer.send('float-btn-move-by', { dx, dy }),
   clearCache: () => ipcRenderer.invoke('clear-cache'),
+  hasConnectionConfig: () => ipcRenderer.invoke('has-connection-config'),
+  verifyAdminPassword: (password) => ipcRenderer.invoke('verify-admin-password', password),
+  getConnectionConfig: () => ipcRenderer.invoke('get-connection-config'),
+  saveConnectionConfig: (conn) => ipcRenderer.invoke('save-connection-config', conn),
+  openConnectionSettings: () => ipcRenderer.invoke('open-connection-settings'),
 });

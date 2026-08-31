@@ -1,0 +1,186 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Connect</title>
+<style>
+  html, body {
+    margin: 0; height: 100%;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #6e1b2c;
+    color: #ffffff;
+  }
+  body {
+    display: flex; flex-direction: column; align-items: stretch; justify-content: center;
+    padding: 0 28px; box-sizing: border-box;
+  }
+  h2 { margin: 0 0 6px; font-size: 17px; font-weight: 700; text-align: center; }
+  p { margin: 0 0 18px; font-size: 12px; color: #f3d9de; font-weight: 600; line-height: 1.4; text-align: center; }
+  .field-label {
+    font-size: 10.5px; color: #e8c9cf; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 5px;
+  }
+  input {
+    width: 100%; padding: 10px 12px; border-radius: 10px; border: none;
+    font-size: 13px; margin-bottom: 12px; box-sizing: border-box;
+    background: #ffffff; color: #2a2020;
+  }
+  input:focus { outline: 2px solid #ffb700; }
+  button {
+    background: #ffb700; color: #2a2020; border: none; width: 100%;
+    padding: 11px 12px; border-radius: 10px; font-weight: 700; font-size: 13px;
+    cursor: pointer; margin-top: 4px;
+  }
+  button:hover { background: #ffc633; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  button.secondary {
+    background: transparent; color: #e8c9cf; margin-top: 8px;
+  }
+  button.secondary:hover { color: #ffffff; }
+  .err { color: #ffd4d4; font-size: 11px; font-weight: 700; margin-top: 10px; min-height: 14px; text-align: center; }
+  .hidden { display: none !important; }
+  hr { border: none; border-top: 1px solid rgba(255,255,255,0.18); margin: 6px 0 16px; }
+</style>
+</head>
+<body>
+  <div id="gate">
+    <h2>Enter Admin Password</h2>
+    <p>Changing where this app connects to needs the admin password that was set when it was first configured.</p>
+    <div class="field-label">Password</div>
+    <input id="gate-password" type="password" />
+    <button id="gate-continue">Continue</button>
+    <div class="err" id="gate-err"></div>
+  </div>
+
+  <div id="form" class="hidden">
+    <h2 id="form-title">Connect to Your Organization</h2>
+    <p id="form-sub">Enter the details your organization's Apps Script backend gave you — see the app's README if you don't have these yet.</p>
+
+    <div class="field-label">Webhook URL</div>
+    <input id="webhook-url" type="text" placeholder="https://script.google.com/macros/s/.../exec" />
+    <div class="field-label">Token</div>
+    <input id="token" type="text" placeholder="Matches SHARED_SECRET on the backend" />
+    <div class="field-label">Sheet URL</div>
+    <input id="sheet-url" type="text" placeholder="https://docs.google.com/spreadsheets/d/.../edit" />
+
+    <hr />
+
+    <div class="field-label" id="password-label">Set an Admin Password</div>
+    <input id="new-password" type="password" placeholder="Needed later to change these details" />
+    <input id="confirm-password" type="password" placeholder="Confirm password" />
+
+    <button id="save-btn">Save</button>
+    <button class="secondary hidden" id="cancel-btn">Cancel</button>
+    <div class="err" id="form-err"></div>
+  </div>
+
+<script>
+  const els = {
+    gate: document.getElementById('gate'),
+    gatePassword: document.getElementById('gate-password'),
+    gateContinue: document.getElementById('gate-continue'),
+    gateErr: document.getElementById('gate-err'),
+    form: document.getElementById('form'),
+    formTitle: document.getElementById('form-title'),
+    formSub: document.getElementById('form-sub'),
+    webhookUrl: document.getElementById('webhook-url'),
+    token: document.getElementById('token'),
+    sheetUrl: document.getElementById('sheet-url'),
+    passwordLabel: document.getElementById('password-label'),
+    newPassword: document.getElementById('new-password'),
+    confirmPassword: document.getElementById('confirm-password'),
+    saveBtn: document.getElementById('save-btn'),
+    cancelBtn: document.getElementById('cancel-btn'),
+    formErr: document.getElementById('form-err'),
+  };
+
+  let isReconfigure = false; // set once we know whether a connection already exists
+
+  function showForm() {
+    els.gate.classList.add('hidden');
+    els.form.classList.remove('hidden');
+    els.webhookUrl.focus();
+  }
+
+  async function init() {
+    isReconfigure = await window.statusApp.hasConnectionConfig();
+    if (!isReconfigure) {
+      // First run — nothing to gate, go straight to the form. A password
+      // is required here (there's nothing to fall back to yet), not optional.
+      showForm();
+      return;
+    }
+    els.formTitle.textContent = 'Update Connection';
+    els.formSub.textContent = "Update your organization's connection details below.";
+    els.passwordLabel.textContent = 'New Admin Password (optional)';
+    els.newPassword.placeholder = 'Leave blank to keep the current password';
+    els.cancelBtn.classList.remove('hidden');
+    els.gatePassword.focus();
+  }
+
+  els.gateContinue.addEventListener('click', async () => {
+    const pw = els.gatePassword.value;
+    if (!pw) { els.gateErr.textContent = 'Enter the admin password.'; return; }
+    els.gateContinue.disabled = true;
+    const ok = await window.statusApp.verifyAdminPassword(pw);
+    els.gateContinue.disabled = false;
+    if (!ok) { els.gateErr.textContent = 'Incorrect password.'; return; }
+
+    const current = await window.statusApp.getConnectionConfig();
+    if (current) {
+      els.webhookUrl.value = current.WEBHOOK_URL || '';
+      els.token.value = current.TOKEN || '';
+      els.sheetUrl.value = current.SHEET_URL || '';
+    }
+    showForm();
+  });
+  els.gatePassword.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') els.gateContinue.click();
+  });
+
+  els.cancelBtn.addEventListener('click', () => window.close());
+
+  els.saveBtn.addEventListener('click', async () => {
+    const webhookUrl = els.webhookUrl.value.trim();
+    const token = els.token.value.trim();
+    const sheetUrl = els.sheetUrl.value.trim();
+    const newPassword = els.newPassword.value;
+    const confirmPassword = els.confirmPassword.value;
+
+    if (!webhookUrl || !token || !sheetUrl) {
+      els.formErr.textContent = 'Webhook URL, Token, and Sheet URL are all required.';
+      return;
+    }
+    if (!isReconfigure && !newPassword) {
+      els.formErr.textContent = 'Set an admin password — it protects these details from being changed later.';
+      return;
+    }
+    if (newPassword && newPassword !== confirmPassword) {
+      els.formErr.textContent = 'Passwords do not match.';
+      return;
+    }
+
+    els.saveBtn.disabled = true;
+    els.saveBtn.textContent = 'Saving…';
+    const result = await window.statusApp.saveConnectionConfig({
+      WEBHOOK_URL: webhookUrl,
+      TOKEN: token,
+      SHEET_URL: sheetUrl,
+      newPassword: newPassword || null,
+    });
+    if (!result.ok) {
+      els.saveBtn.disabled = false;
+      els.saveBtn.textContent = 'Save';
+      els.formErr.textContent = result.error || 'Something went wrong — try again.';
+      return;
+    }
+    // First-run: main.js closes this window itself once it's done advancing
+    // past onboarding. Reconfigure: nothing further happens automatically,
+    // so close it here instead of leaving a "Saving…" button up forever.
+    if (isReconfigure) window.close();
+  });
+
+  init();
+</script>
+</body>
+</html>

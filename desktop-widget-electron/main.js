@@ -1,29 +1,104 @@
 const { app, Tray, Menu, BrowserWindow, ipcMain, screen, nativeImage, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const APP_VERSION = require('./package.json').version;
 
 // Dev convenience: a full config.json next to main.js (gitignored) overrides
 // everything, including YOUR_NAME — this is what `npm start` uses locally.
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 // Shared connection details (WEBHOOK_URL/TOKEN/SHEET_URL) baked into the
-// installer at build time — same for every teammate.
+// installer at build time — an org building their OWN internal-only
+// installer (not distributing through a store) can still do this; it's
+// just no longer the only way to configure a connection.
 const TEMPLATE_PATH = path.join(__dirname, 'config.template.json');
 // Per-person name, written on first run into each teammate's own profile
 // folder — never baked into the installer, never shared between installs.
 const USER_CONFIG_PATH = path.join(app.getPath('userData'), 'user-config.json');
 const POSITION_PATH = path.join(app.getPath('userData'), 'float-position.json');
+// Connection details entered through the app itself (the "Connect to your
+// organization" screen) — this is what makes a store-distributed build
+// (no config.template.json baked in at all) work: whoever installs it
+// enters their own org's WEBHOOK_URL/TOKEN/SHEET_URL at first launch,
+// nothing about which organization this is is compiled into the binary.
+// Password-gated to change once set — see hashPassword()/verifyPassword().
+const CONNECTION_CONFIG_PATH = path.join(app.getPath('userData'), 'connection-config.json');
 
 function loadSharedConfig() {
+  // Order matters: an existing dev config.json or a baked-in
+  // config.template.json (an org's own internal build) both still work
+  // exactly as before, unchanged. Only when NEITHER exists does this fall
+  // through to whatever's been entered at runtime through the app's own
+  // "Connect" screen — and if that's empty too, returns null instead of
+  // throwing, so app.whenReady() can show that screen instead of just
+  // erroring out and quitting.
   if (fs.existsSync(CONFIG_PATH)) {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   }
   if (fs.existsSync(TEMPLATE_PATH)) {
     return JSON.parse(fs.readFileSync(TEMPLATE_PATH, 'utf8'));
   }
-  throw new Error(
-    `Missing config.json or config.template.json next to main.js.\nExpected at: ${CONFIG_PATH}`
-  );
+  var saved = loadConnectionConfig();
+  if (saved) {
+    return { WEBHOOK_URL: saved.WEBHOOK_URL, TOKEN: saved.TOKEN, SHEET_URL: saved.SHEET_URL };
+  }
+  return null;
+}
+
+// -------------------- runtime connection config + admin password --------------------
+
+function loadConnectionConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONNECTION_CONFIG_PATH, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function hashPassword(password) {
+  var salt = crypto.randomBytes(16).toString('hex');
+  var hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return { salt: salt, hash: hash };
+}
+
+function verifyPassword(password, salt, hash) {
+  var candidate = crypto.scryptSync(password, salt, 64).toString('hex');
+  var a = Buffer.from(candidate, 'hex');
+  var b = Buffer.from(hash, 'hex');
+  // Length check first — timingSafeEqual throws on mismatched lengths
+  // rather than just returning false, and a wrong-length hash should
+  // never happen anyway (scrypt output length is fixed), so this isn't
+  // itself a timing leak worth worrying about.
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// Saves WEBHOOK_URL/TOKEN/SHEET_URL (+ the password hash, new or carried
+// over from before) to disk and updates the in-memory `config` so the
+// running app picks up the change immediately without a restart — same
+// pattern saveYourNameToDisk() already uses for YOUR_NAME.
+function saveConnectionConfig(conn) {
+  var existing = loadConnectionConfig();
+  var passwordFields;
+  if (conn.newPassword) {
+    passwordFields = hashPassword(conn.newPassword);
+  } else if (existing) {
+    passwordFields = { salt: existing.salt, hash: existing.hash };
+  } else {
+    throw new Error('A password is required the first time you connect.');
+  }
+  var toSave = {
+    WEBHOOK_URL: conn.WEBHOOK_URL,
+    TOKEN: conn.TOKEN,
+    SHEET_URL: conn.SHEET_URL,
+    salt: passwordFields.salt,
+    hash: passwordFields.hash,
+  };
+  fs.writeFileSync(CONNECTION_CONFIG_PATH, JSON.stringify(toSave));
+  config = Object.assign({}, config, {
+    WEBHOOK_URL: toSave.WEBHOOK_URL,
+    TOKEN: toSave.TOKEN,
+    SHEET_URL: toSave.SHEET_URL,
+  });
 }
 
 // Both YOUR_NAME and the openAtLogin preference below live in this same
@@ -53,22 +128,31 @@ function saveYourNameToDisk(name) {
   saveUserConfig({ YOUR_NAME: name });
 }
 
+// null here means "nothing configured yet, and that's fine" — no
+// config.json/config.template.json AND nothing saved from the Connect
+// screen — app.whenReady() below shows that screen instead of erroring
+// out. A THROWN error (e.g. malformed JSON in an existing file) is a
+// different, real problem that can't be fixed by re-running Connect, so
+// that path still surfaces a dialog and quits like before.
 let config;
+let configLoadFailed = false; // distinguishes "genuinely broken file" from "nothing configured yet" below — both leave config null
 try {
   config = loadSharedConfig();
-  if (!config.YOUR_NAME) config.YOUR_NAME = loadSavedName();
+  if (config && !config.YOUR_NAME) config.YOUR_NAME = loadSavedName();
 } catch (err) {
   app.whenReady().then(() => {
     dialog.showErrorBox('Status Update — setup needed', err.message);
     app.quit();
   });
   config = null;
+  configLoadFailed = true;
 }
 
 let tray = null;
 let popup = null;
 let floatBtn = null;
 let setupWin = null;
+let connectWin = null;
 
 // -------------------- backend calls (with retry) --------------------
 
@@ -314,6 +398,78 @@ ipcMain.handle('save-your-name', (_e, name) => {
   startMainApp();
 });
 
+// -------------------- connect-to-your-organization --------------------
+
+ipcMain.handle('has-connection-config', () => !!loadConnectionConfig());
+
+ipcMain.handle('verify-admin-password', (_e, password) => {
+  var saved = loadConnectionConfig();
+  if (!saved) return false; // nothing set yet — see the comment on saveConnectionConfig()
+  return verifyPassword(password, saved.salt, saved.hash);
+});
+
+// Deliberately never returns the salt/hash to the renderer — those never
+// need to leave this process.
+ipcMain.handle('get-connection-config', () => {
+  var saved = loadConnectionConfig();
+  return saved ? { WEBHOOK_URL: saved.WEBHOOK_URL, TOKEN: saved.TOKEN, SHEET_URL: saved.SHEET_URL } : null;
+});
+
+ipcMain.handle('save-connection-config', (event, conn) => {
+  try {
+    saveConnectionConfig(conn);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  // Only the FIRST-run Connect window (no config existed before this
+  // call) needs to advance the app past onboarding — a reconfigure from
+  // the running app's own Settings screen just reports success back and
+  // lets that screen decide what to show next.
+  if (connectWin && !connectWin.isDestroyed() && event.sender === connectWin.webContents) {
+    connectWin.close();
+    connectWin = null;
+    if (!config.YOUR_NAME) {
+      setupWin = createSetupWindow();
+    } else {
+      startMainApp();
+    }
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('open-connection-settings', () => {
+  if (!connectWin || connectWin.isDestroyed()) {
+    connectWin = createConnectWindow();
+  } else {
+    connectWin.show();
+    connectWin.focus();
+  }
+});
+
+function createConnectWindow() {
+  var win = new BrowserWindow({
+    width: 420,
+    height: 480,
+    resizable: false,
+    fullscreenable: false,
+    minimizable: false,
+    maximizable: false,
+    title: 'Connect — Report Generator',
+    backgroundColor: '#6e1b2c',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.setMenuBarVisibility(false);
+  win.loadFile(path.join(__dirname, 'renderer', 'connect.html'));
+  win.on('closed', () => {
+    if (connectWin === win) connectWin = null;
+  });
+  return win;
+}
+
 // -------------------- first-run "what's your name" prompt --------------------
 
 function createSetupWindow() {
@@ -534,7 +690,15 @@ function startMainApp() {
 }
 
 app.whenReady().then(() => {
-  if (!config) return;
+  if (configLoadFailed) return; // already showing the error dialog + quitting above
+
+  if (!config) {
+    // No config.json, no config.template.json, and nothing saved from a
+    // previous Connect — this is what makes a store-distributed build
+    // (no organization baked in at all) work: ask for it here instead.
+    connectWin = createConnectWindow();
+    return;
+  }
 
   prefetchAll(); // warm the tabs/columns cache immediately, don't make the first click wait
 

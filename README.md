@@ -117,17 +117,30 @@ does not use it at all.
 
 ## 4. Package it for teammates — one file, zero setup
 
-Teammates get a **single `.exe`** — no Node.js, no `config.json` to edit,
-no manual install steps. Double-clicking it installs the app silently and
-launches it; the first time it runs, it just asks for the person's name,
-then remembers it.
+Teammates get a **single `.exe`** — no Node.js, no manual install steps.
+Double-clicking it installs the app silently and launches it. What happens
+next depends on whether you baked connection details into the build:
 
-This works because the app now reads connection details
-(`WEBHOOK_URL`/`TOKEN`/`SHEET_URL`) from `config.template.json`, which gets
-baked into the installer at build time and is the same for every
-teammate. Each person's name is asked once on first launch and saved to
-their own Windows profile — never shared between installs, never baked
-into the installer.
+- **`config.template.json` present** (below) — same as before: connects
+  automatically, just asks for the person's name once.
+- **No `config.template.json` at all** (the App Store / generic-distribution
+  case — see the next section) — first launch instead asks the person to
+  enter their own organization's `WEBHOOK_URL`/`TOKEN`/`SHEET_URL`
+  themselves, and to set an admin password that protects those details
+  from being casually changed again later (Settings → "Change organization
+  connection" asks for it). Nothing about which organization this is gets
+  compiled into the binary either way — that's what makes a single build
+  distributable to more than one team.
+
+Each person's name is asked once on first launch and saved to their own
+Windows profile regardless of which path above applies — never shared
+between installs, never baked into the installer.
+
+### Baking in one organization's details (internal-only distribution)
+
+If every teammate is on the same team as you (this repo's original use
+case, not the App Store one), it's still simplest to bake the connection
+in once so nobody has to type anything:
 
 **One-time setup before building** (you only do this once, not per teammate):
 

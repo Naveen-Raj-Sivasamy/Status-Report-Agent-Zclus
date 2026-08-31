@@ -505,12 +505,18 @@ function doPost(e) {
     } finally {
       lock.releaseLock();
     }
-    // Outside the lock — a slow/unreachable Teams webhook shouldn't hold up
-    // anyone else's write. postWeeklyConnectToTeams() never throws (see its
-    // own comment), so a failed post here can't turn a successful save into
-    // an error response — the ticket is already safely on the sheet either way.
+    // Scheduled, not called directly — UrlFetchApp.fetch() is a blocking
+    // call with no async/fire-and-forget option in Apps Script, so calling
+    // postWeeklyConnectToTeams() right here would make THIS save wait on
+    // however long Teams (or a Power Automate flow behind the webhook)
+    // takes to respond, which can be several seconds — the sheet write
+    // above already succeeded by this point, so there's no reason the
+    // widget's "Saving…" should still be sitting there because of it.
+    // scheduleWeeklyConnectTeamsPost_() queues the post and returns
+    // immediately; the actual Teams call happens moments later in a
+    // separate execution, after this response has already gone out.
     if (body.tab === WEEKLY_CONNECT_TAB_NAME) {
-      postWeeklyConnectToTeams(values['Group'] || '');
+      scheduleWeeklyConnectTeamsPost_(values['Group'] || '');
     }
     return jsonOut({ ok: true, message: 'Saved to "' + body.tab + '".' });
   } catch (err) {
@@ -1183,6 +1189,64 @@ function getCurrentConnectWeekRange() {
   return { start: weekStart, end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59, 59) };
 }
 
+// Script Property holding the comma-separated list of group names still
+// waiting on a Teams post — see scheduleWeeklyConnectTeamsPost_() below.
+// '__legacy__' stands in for "blank Group" (a ticket saved before Group
+// existed, or no groups configured at all), so it round-trips safely
+// through the same comma-list helper every other list property uses.
+var PENDING_TEAMS_GROUPS_PROP = 'PENDING_WEEKLY_CONNECT_TEAMS_GROUPS';
+
+/** Queues `groupName` for a Teams post and schedules a one-time trigger to
+ * actually send it, instead of calling postWeeklyConnectToTeams() right
+ * here — UrlFetchApp.fetch() is a blocking call with no true async/
+ * fire-and-forget option in Apps Script, so posting directly from doPost
+ * would make the save itself wait on however long Teams (or a Power
+ * Automate flow behind the webhook) takes to respond, which can be
+ * several seconds. This returns almost instantly; the real post happens
+ * moments later in a separate execution, well after doPost's response has
+ * already gone out. Never throws — a failure here (e.g. hitting the
+ * per-project trigger quota under a burst of submissions) should never
+ * turn a successful save into an error. */
+function scheduleWeeklyConnectTeamsPost_(groupName) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var pending = getScriptPropList_(PENDING_TEAMS_GROUPS_PROP);
+    var key = groupName || '__legacy__';
+    if (pending.indexOf(key) === -1) {
+      pending.push(key);
+      props.setProperty(PENDING_TEAMS_GROUPS_PROP, pending.join(','));
+    }
+    ScriptApp.newTrigger('runScheduledWeeklyConnectTeamsPosts_')
+      .timeBased()
+      .after(1000)
+      .create();
+  } catch (err) {
+    Logger.log('scheduleWeeklyConnectTeamsPost_ failed: ' + err);
+  }
+}
+
+/** Fired by the one-time trigger scheduleWeeklyConnectTeamsPost_() creates
+ * — reads whatever groups piled up since the last run (usually just one),
+ * posts each to Teams, and clears the queue. A quick back-to-back burst
+ * of submissions can schedule more than one of these triggers before the
+ * first fires; the extras find an already-empty queue and just no-op, so
+ * this also sweeps up any of ITS OWN leftover triggers each time it runs,
+ * rather than letting them pile up toward the per-project trigger quota. */
+function runScheduledWeeklyConnectTeamsPosts_() {
+  var props = PropertiesService.getScriptProperties();
+  var pending = getScriptPropList_(PENDING_TEAMS_GROUPS_PROP);
+  props.deleteProperty(PENDING_TEAMS_GROUPS_PROP);
+  pending.forEach(function (key) {
+    postWeeklyConnectToTeams(key === '__legacy__' ? '' : key);
+  });
+
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'runScheduledWeeklyConnectTeamsPosts_') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
+
 /** Posts (as a fresh message — see the comment on CONNECT_GROUPS_TAB_NAME/
  * the Weekly Connect plan for why this isn't a truly edited single
  * message) every `groupName` ticket raised in the current connect week, to
@@ -1193,9 +1257,10 @@ function getCurrentConnectWeekRange() {
  * `groupName` itself is blank (a ticket saved before Group existed, or
  * with no groups configured at all yet) — either way, Weekly Connect
  * works fine without Teams, same as the Friday reminder does. Never
- * throws: a Teams outage should never take down the actual save, which is
- * why doPost calls this AFTER appendRow already succeeded, in its own
- * try/catch. */
+ * throws: a bad Teams call should never surface as an error somewhere
+ * downstream (see scheduleWeeklyConnectTeamsPost_() above for how this
+ * gets called — always from its own separate execution by now, never
+ * inline with a save). */
 function postWeeklyConnectToTeams(groupName) {
   var teamsWebhookUrl = groupName ? getConnectGroupWebhookUrl(groupName) : getTeamsWebhookUrl();
   if (!teamsWebhookUrl) return;

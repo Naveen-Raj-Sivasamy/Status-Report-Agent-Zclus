@@ -550,6 +550,10 @@ function createConnectWindow() {
     fullscreenable: false,
     minimizable: false,
     maximizable: false,
+    frame: false, // native Windows chrome rendered as a plain white/blue
+    // title bar that didn't match the app's own maroon branding anywhere
+    // else — connect.html now draws its own title bar/close button
+    // instead, same as the main popup already does.
     title: 'Connect — Report Generator',
     backgroundColor: '#6e1b2c',
     webPreferences: {
@@ -590,6 +594,7 @@ function createManageWindow() {
     minWidth: 480,
     minHeight: 420,
     fullscreenable: false,
+    frame: false, // see the same comment in createConnectWindow() above
     title: 'Manage Fields & Options',
     backgroundColor: '#6e1b2c',
     webPreferences: {

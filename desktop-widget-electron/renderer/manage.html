@@ -5,12 +5,28 @@
 <title>Manage Fields &amp; Options</title>
 <style>
   html, body {
-    margin: 0;
+    margin: 0; height: 100%;
     font-family: 'Segoe UI', Arial, sans-serif;
     background: #6e1b2c;
     color: #ffffff;
   }
-  body { padding: 20px 24px 32px; box-sizing: border-box; }
+  body { display: flex; flex-direction: column; padding: 0; box-sizing: border-box; }
+  /* Frameless window (see main.js) — this replaces the native OS title
+     bar, which rendered as a plain white/blue bar that never matched the
+     app's own maroon branding anywhere else. */
+  .titlebar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; flex: 0 0 auto;
+    -webkit-app-region: drag;
+  }
+  .titlebar-title { font-size: 12px; font-weight: 700; color: #f3d9de; letter-spacing: 0.3px; white-space: nowrap; }
+  .titlebar-close {
+    background: rgba(255,255,255,0.14); border: none; color: #ffffff;
+    font-size: 12px; cursor: pointer; padding: 4px 9px; border-radius: 7px;
+    -webkit-app-region: no-drag; /* stay clickable inside the draggable title bar */
+  }
+  .titlebar-close:hover { background: rgba(255,255,255,0.24); }
+  .scroll-area { flex: 1 1 auto; overflow-y: auto; padding: 12px 24px 32px; box-sizing: border-box; }
   h2 { margin: 0 0 6px; font-size: 17px; font-weight: 700; }
   h3 { margin: 0 0 4px; font-size: 14px; font-weight: 700; color: #ffe9c7; }
   p.hint { margin: 0 0 14px; font-size: 11.5px; color: #f3d9de; font-weight: 600; line-height: 1.4; }
@@ -74,6 +90,12 @@
 </style>
 </head>
 <body>
+  <div class="titlebar">
+    <span class="titlebar-title">Manage Fields</span>
+    <button class="titlebar-close" id="titlebar-close-btn" title="Close">✕</button>
+  </div>
+
+  <div class="scroll-area">
   <div id="gate">
     <h2>Enter Admin Password</h2>
     <p class="hint">Managing fields, options, and categories needs the admin password that was set when this app was first configured.</p>
@@ -159,8 +181,10 @@
 
     <button class="secondary" id="close-btn" style="width:100%;">Close</button>
   </div>
+  </div>
 
 <script>
+  document.getElementById('titlebar-close-btn').addEventListener('click', () => window.close());
   let liveTabs = [];
   let optionsMap = {};
   let fieldSchemaMap = {};

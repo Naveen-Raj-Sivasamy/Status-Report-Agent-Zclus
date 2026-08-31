@@ -10,9 +10,25 @@
     background: #6e1b2c;
     color: #ffffff;
   }
-  body {
-    display: flex; flex-direction: column; align-items: stretch; justify-content: center;
-    padding: 0 28px; box-sizing: border-box;
+  body { display: flex; flex-direction: column; padding: 0; box-sizing: border-box; }
+  /* Frameless window (see main.js) — this replaces the native OS title
+     bar, which rendered as a plain white/blue bar that never matched the
+     app's own maroon branding anywhere else. */
+  .titlebar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; flex: 0 0 auto;
+    -webkit-app-region: drag;
+  }
+  .titlebar-title { font-size: 12px; font-weight: 700; color: #f3d9de; letter-spacing: 0.3px; white-space: nowrap; }
+  .titlebar-close {
+    background: rgba(255,255,255,0.14); border: none; color: #ffffff;
+    font-size: 12px; cursor: pointer; padding: 4px 9px; border-radius: 7px;
+    -webkit-app-region: no-drag; /* stay clickable inside the draggable title bar */
+  }
+  .titlebar-close:hover { background: rgba(255,255,255,0.24); }
+  .content {
+    flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center;
+    padding: 0 28px 28px; box-sizing: border-box; overflow-y: auto;
   }
   h2 { margin: 0 0 6px; font-size: 17px; font-weight: 700; text-align: center; }
   p { margin: 0 0 18px; font-size: 12px; color: #f3d9de; font-weight: 600; line-height: 1.4; text-align: center; }
@@ -43,38 +59,46 @@
 </style>
 </head>
 <body>
-  <div id="gate">
-    <h2>Enter Admin Password</h2>
-    <p>Changing where this app connects to needs the admin password that was set when it was first configured.</p>
-    <div class="field-label">Password</div>
-    <input id="gate-password" type="password" />
-    <button id="gate-continue">Continue</button>
-    <div class="err" id="gate-err"></div>
+  <div class="titlebar">
+    <span class="titlebar-title">Connect</span>
+    <button class="titlebar-close" id="titlebar-close-btn" title="Close">✕</button>
   </div>
 
-  <div id="form" class="hidden">
-    <h2 id="form-title">Connect to Your Organization</h2>
-    <p id="form-sub">Enter the details your organization's Apps Script backend gave you — see the app's README if you don't have these yet.</p>
+  <div class="content">
+    <div id="gate">
+      <h2>Enter Admin Password</h2>
+      <p>Changing where this app connects to needs the admin password that was set when it was first configured.</p>
+      <div class="field-label">Password</div>
+      <input id="gate-password" type="password" />
+      <button id="gate-continue">Continue</button>
+      <div class="err" id="gate-err"></div>
+    </div>
 
-    <div class="field-label">Webhook URL</div>
-    <input id="webhook-url" type="text" placeholder="https://script.google.com/macros/s/.../exec" />
-    <div class="field-label">Token</div>
-    <input id="token" type="text" placeholder="Matches SHARED_SECRET on the backend" />
-    <div class="field-label">Sheet URL</div>
-    <input id="sheet-url" type="text" placeholder="https://docs.google.com/spreadsheets/d/.../edit" />
+    <div id="form" class="hidden">
+      <h2 id="form-title">Connect to Your Organization</h2>
+      <p id="form-sub">Enter the details your organization's Apps Script backend gave you — see the app's README if you don't have these yet.</p>
 
-    <hr />
+      <div class="field-label">Webhook URL</div>
+      <input id="webhook-url" type="text" placeholder="https://script.google.com/macros/s/.../exec" />
+      <div class="field-label">Token</div>
+      <input id="token" type="text" placeholder="Matches SHARED_SECRET on the backend" />
+      <div class="field-label">Sheet URL</div>
+      <input id="sheet-url" type="text" placeholder="https://docs.google.com/spreadsheets/d/.../edit" />
 
-    <div class="field-label" id="password-label">Set an Admin Password</div>
-    <input id="new-password" type="password" placeholder="Needed later to change these details" />
-    <input id="confirm-password" type="password" placeholder="Confirm password" />
+      <hr />
 
-    <button id="save-btn">Save</button>
-    <button class="secondary hidden" id="cancel-btn">Cancel</button>
-    <div class="err" id="form-err"></div>
+      <div class="field-label" id="password-label">Set an Admin Password</div>
+      <input id="new-password" type="password" placeholder="Needed later to change these details" />
+      <input id="confirm-password" type="password" placeholder="Confirm password" />
+
+      <button id="save-btn">Save</button>
+      <button class="secondary hidden" id="cancel-btn">Cancel</button>
+      <div class="err" id="form-err"></div>
+    </div>
   </div>
 
 <script>
+  document.getElementById('titlebar-close-btn').addEventListener('click', () => window.close());
   const els = {
     gate: document.getElementById('gate'),
     gatePassword: document.getElementById('gate-password'),

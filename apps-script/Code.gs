@@ -47,6 +47,10 @@
  * it, and an org that never adds a row there just gets one flat tab list —
  * no category picker screen at all.
  *
+ * _Features (auto-created, see ensureFeaturesTab()) is a plain step-by-step
+ * guide to all of the above, written directly into the sheet for whoever's
+ * editing it day to day — nothing reads it programmatically.
+ *
  * REQUIRED ONE-TIME SETUP: SHARED_SECRET and the recipient lists are NOT
  * hardcoded in this file (this repo is public — a committed secret/PII
  * would be readable by anyone). Run setupScriptProperties() once from the
@@ -681,6 +685,7 @@ function listVisibleTabsUncached() {
   ensureOptionsTab();
   ensureFieldSchemaTab();
   ensureCategoriesTab();
+  ensureFeaturesTab();
   return SpreadsheetApp.getActiveSpreadsheet()
     .getSheets()
     .map(function (s) { return s.getName(); })
@@ -981,6 +986,79 @@ function getCategoriesMap() {
     map[category].push(tab);
   });
   return map;
+}
+
+// A plain-English, step-by-step guide to everything above, written INTO
+// the sheet itself so whoever's editing _Options/_FieldSchema/_Categories
+// doesn't need to go find this source file to remember the rules. Starts
+// with "_" so it's hidden from the widget's tab list like every other
+// config tab — it's for a human reading the Sheet directly, not a widget
+// screen. Created once; never touched again after that (same as
+// ensureLeaveTab()), so feel free to edit/reformat it in the Sheet — this
+// function won't overwrite your changes on a later run.
+var FEATURES_TAB_NAME = '_Features';
+
+function ensureFeaturesTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(FEATURES_TAB_NAME)) return;
+  var sheet = ss.insertSheet(FEATURES_TAB_NAME);
+
+  var rows = [
+    ['Task', 'Steps', 'Notes'],
+    [
+      'Add a new dropdown/multiselect option',
+      '1. Open _Options.\n2. Add a row: List = the OptionsKey from _FieldSchema for that field (e.g. "Leave.Type").\n3. Option = the new value.',
+      'No new List name needed if it already exists elsewhere.',
+    ],
+    [
+      'Edit an existing option',
+      '1. Find its row in _Options.\n2. Edit the Option cell directly.',
+      "Doesn't change past rows already saved with the old text — only future choices.",
+    ],
+    [
+      'Delete an option',
+      '1. Delete its row in _Options.',
+      'Past entries keep the old value; it just stops being offered.',
+    ],
+    [
+      'Turn a plain-text field into a dropdown/date/etc.',
+      '1. Open _FieldSchema.\n2. Add a row: Tab = sheet tab name, Column = exact header text.\n3. Type = select / multiselect / date / week-auto / sequence.\n4. OptionsKey = a List name in _Options (add it there too if new).',
+      'week-auto also needs BasedOn = the Date column\'s header. sequence auto-numbers, no OptionsKey needed.',
+    ],
+    [
+      'Revert a field back to plain text',
+      '1. Delete its row in _FieldSchema.',
+      '',
+    ],
+    [
+      'Add a new landing-screen category',
+      '1. Open _Categories.\n2. Add rows: Category = new or existing name, Tab = the sheet tab to put under it.',
+      'A tab left out of _Categories still shows, just ungrouped ("More" if other categories exist, or a flat list if none do).',
+    ],
+    [
+      'Add a brand-new tab (a whole new kind of entry)',
+      '1. Right-click the tabs bar in Sheets -> Insert sheet.\n2. Name it, then put your column headers in row 1.',
+      "Shows up in the widget automatically. To fold it into the Friday emailed report too, add its exact name to REPORT_TABS in Code.gs (still a code change).",
+    ],
+    [
+      'See your changes in the app right away',
+      '1. Open the app -> Settings -> "Refresh tabs & fields (clear cache)".',
+      'Otherwise changes show up on their own within ~5 minutes (CACHE_SECONDS).',
+    ],
+    [
+      "What's still a code change (not sheet-editable)",
+      '- Which tabs count toward the Friday report (REPORT_TABS)\n- Who gets the report/reminder emails (Script Properties)\n- The shared connection token/password',
+      'Ask whoever set up the backend for these.',
+    ],
+  ];
+
+  sheet.getRange(1, 1, rows.length, 3).setValues(rows);
+  sheet.getRange(1, 1, 1, 3).setFontWeight('bold');
+  sheet.setColumnWidths(1, 1, 220);
+  sheet.setColumnWidths(2, 1, 420);
+  sheet.setColumnWidths(3, 1, 260);
+  sheet.getRange(2, 1, rows.length - 1, 3).setWrap(true);
+  sheet.setFrozenRows(1);
 }
 
 function getSheetByName(name) {

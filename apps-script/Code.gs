@@ -269,6 +269,38 @@ function doPost(e) {
       return jsonOut({ ok: true, message: 'Cache cleared.' });
     }
 
+    /** Powers the widget's in-app "Manage Fields & Options" screen (local-
+     * password-gated on the client side, same admin password as connecting
+     * a new backend — see main.js). Each of these three actions replaces
+     * that ENTIRE tab's data rows with whatever the client sends, rather
+     * than patching individual rows — the client always sends the full,
+     * current map back (it fetched the same shape via GET first), so a
+     * full replace is simpler and can't drift out of sync from a partial
+     * edit. Row 1 (headers) is never touched. */
+    if (body.action === 'saveOptions' || body.action === 'saveFieldSchema' || body.action === 'saveCategories') {
+      var writeLock = LockService.getScriptLock();
+      if (!writeLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        if (body.action === 'saveOptions') {
+          writeOptionsMap(body.options || {});
+          CacheService.getScriptCache().remove('options');
+          return jsonOut({ ok: true, message: 'Options saved.' });
+        }
+        if (body.action === 'saveFieldSchema') {
+          writeFieldSchemaMap(body.fieldSchema || {});
+          CacheService.getScriptCache().remove('fieldSchema');
+          return jsonOut({ ok: true, message: 'Field types saved.' });
+        }
+        writeCategoriesMap(body.categories || {});
+        CacheService.getScriptCache().remove('categories');
+        return jsonOut({ ok: true, message: 'Categories saved.' });
+      } finally {
+        writeLock.releaseLock();
+      }
+    }
+
     /** Called by the build-release CI workflow right after it publishes a
      * new installer, so the widget's "update available" banner and its
      * DownloadUrl-driven "Get it" button stay in sync automatically. */
@@ -848,6 +880,27 @@ function getOptionsMap() {
   return map;
 }
 
+/** Replaces every data row (everything below the header) on _Options with
+ * `map` — used by the widget's in-app "Manage Fields & Options" screen.
+ * Only ever called while already holding the write lock (see doPost). Blank
+ * keys/options are dropped rather than written as broken rows. */
+function writeOptionsMap(map) {
+  ensureOptionsTab();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(OPTIONS_TAB_NAME);
+  var rows = [];
+  Object.keys(map).forEach(function (key) {
+    var optionsKey = String(key).trim();
+    if (!optionsKey) return;
+    (map[key] || []).forEach(function (opt) {
+      var option = String(opt).trim();
+      if (option) rows.push([optionsKey, option]);
+    });
+  });
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, 2).clearContent();
+  if (rows.length) sheet.getRange(2, 1, rows.length, 2).setValues(rows);
+}
+
 // Which form fields get a dropdown/date-picker/multiselect/etc., instead
 // of the plain-text default, per (Tab, Column) — used to live entirely in
 // the widget's own code (FIELD_CONFIG in field-config.js). Now it's a
@@ -936,6 +989,32 @@ function getFieldSchemaMap() {
   return map;
 }
 
+/** Replaces every data row on _FieldSchema with `map` — used by the
+ * widget's in-app "Manage Fields & Options" screen. Only ever called while
+ * already holding the write lock (see doPost). A (Tab, Column) with a
+ * blank Tab, Column, or Type is dropped rather than written as a broken
+ * row. */
+function writeFieldSchemaMap(map) {
+  ensureFieldSchemaTab();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(FIELD_SCHEMA_TAB_NAME);
+  var rows = [];
+  Object.keys(map).forEach(function (tabName) {
+    var tab = String(tabName).trim();
+    if (!tab) return;
+    var columns = map[tabName] || {};
+    Object.keys(columns).forEach(function (columnName) {
+      var column = String(columnName).trim();
+      var spec = columns[columnName] || {};
+      var type = String(spec.type || '').trim();
+      if (!column || !type) return;
+      rows.push([tab, column, type, String(spec.optionsKey || '').trim(), String(spec.basedOn || '').trim()]);
+    });
+  });
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, 5).clearContent();
+  if (rows.length) sheet.getRange(2, 1, rows.length, 5).setValues(rows);
+}
+
 // Which landing-screen category each tab is grouped under (the "Report
 // Generator" / "Team Management" picker) — used to live entirely in the
 // widget's own code (CATEGORIES in field-config.js). Now it's a sheet tab
@@ -1002,6 +1081,28 @@ function getCategoriesMap() {
   return map;
 }
 
+/** Replaces every data row on _Categories with `map` — used by the
+ * widget's in-app "Manage Fields & Options" screen. Only ever called while
+ * already holding the write lock (see doPost). A category with a blank
+ * name, or no tabs left under it, is dropped rather than written as an
+ * empty/broken row. */
+function writeCategoriesMap(map) {
+  ensureCategoriesTab();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CATEGORIES_TAB_NAME);
+  var rows = [];
+  Object.keys(map).forEach(function (categoryName) {
+    var category = String(categoryName).trim();
+    if (!category) return;
+    (map[categoryName] || []).forEach(function (tabName) {
+      var tab = String(tabName).trim();
+      if (tab) rows.push([category, tab]);
+    });
+  });
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, 2).clearContent();
+  if (rows.length) sheet.getRange(2, 1, rows.length, 2).setValues(rows);
+}
+
 // A plain-English, step-by-step guide to everything above, written INTO
 // the sheet itself so whoever's editing _Options/_FieldSchema/_Categories
 // doesn't need to go find this source file to remember the rules. Starts
@@ -1017,7 +1118,7 @@ function getCategoriesMap() {
 // stays in sync with whatever this function actually knows how to
 // document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
-var FEATURES_GUIDE_VERSION = '2';
+var FEATURES_GUIDE_VERSION = '3';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1030,6 +1131,11 @@ function ensureFeaturesTab() {
 
   var rows = [
     ['Task', 'Steps', 'Notes'],
+    [
+      'Use the in-app editor instead of this sheet',
+      'Open the widget -> Settings -> "Manage fields & options" (asks for the admin password).',
+      'Covers everything below except adding a brand-new tab. Edits the same _Options/_FieldSchema/_Categories rows either way — this sheet stays the source of truth.',
+    ],
     [
       'Add a new dropdown/multiselect option',
       '1. Open _Options.\n2. Add a row: OptionsKey = the OptionsKey from _FieldSchema for that field (e.g. "Leave.Type").\n3. Option = the new value.',

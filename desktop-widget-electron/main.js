@@ -153,6 +153,7 @@ let popup = null;
 let floatBtn = null;
 let setupWin = null;
 let connectWin = null;
+let manageWin = null;
 
 // -------------------- backend calls (with retry) --------------------
 
@@ -363,6 +364,26 @@ ipcMain.handle('clear-cache', async () => {
   categoriesCache = null;
   return result;
 });
+// Powers the in-app "Manage Fields & Options" screen — each just posts the
+// client's full, current map back to the backend (which replaces that
+// tab's data rows wholesale, see writeOptionsMap() etc. in Code.gs), then
+// drops this process's own in-memory copy so the very next read is fresh
+// instead of serving what's now stale for up to CACHE_SECONDS.
+ipcMain.handle('save-options', async (_e, options) => {
+  const result = await apiPostBody({ action: 'saveOptions', options });
+  optionsCache = null;
+  return result;
+});
+ipcMain.handle('save-field-schema', async (_e, fieldSchema) => {
+  const result = await apiPostBody({ action: 'saveFieldSchema', fieldSchema });
+  fieldSchemaCache = null;
+  return result;
+});
+ipcMain.handle('save-categories', async (_e, categories) => {
+  const result = await apiPostBody({ action: 'saveCategories', categories });
+  categoriesCache = null;
+  return result;
+});
 ipcMain.handle('download-report', async (_e, range) => {
   const data = await apiPostBody(Object.assign({ action: 'downloadReport' }, range || {}));
   const { canceled, filePath } = await dialog.showSaveDialog({
@@ -528,6 +549,46 @@ function createConnectWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'connect.html'));
   win.on('closed', () => {
     if (connectWin === win) connectWin = null;
+  });
+  return win;
+}
+
+// -------------------- in-app "Manage Fields & Options" --------------------
+
+// Reuses the exact same admin password as connecting to a new backend —
+// verifyAdminPassword above — rather than a second password to set up and
+// remember. A separate resizable window (like createConnectWindow), not a
+// screen inside the popup: this can get tall (many options/fields/
+// categories), and keeping it independent of the popup's own show*()
+// screen-switching state avoids tangling two very different UIs together.
+ipcMain.handle('open-manage-screen', () => {
+  if (!manageWin || manageWin.isDestroyed()) {
+    manageWin = createManageWindow();
+  } else {
+    manageWin.show();
+    manageWin.focus();
+  }
+});
+
+function createManageWindow() {
+  var win = new BrowserWindow({
+    width: 560,
+    height: 700,
+    minWidth: 480,
+    minHeight: 420,
+    fullscreenable: false,
+    title: 'Manage Fields & Options',
+    backgroundColor: '#6e1b2c',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.setMenuBarVisibility(false);
+  win.loadFile(path.join(__dirname, 'renderer', 'manage.html'));
+  win.on('closed', () => {
+    if (manageWin === win) manageWin = null;
   });
   return win;
 }

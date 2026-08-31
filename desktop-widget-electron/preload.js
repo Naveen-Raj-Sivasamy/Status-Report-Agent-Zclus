@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('statusApp', {
   getOptions: () => ipcRenderer.invoke('get-options'),
   getFieldSchema: () => ipcRenderer.invoke('get-field-schema'),
   getCategories: () => ipcRenderer.invoke('get-categories'),
+  saveOptions: (options) => ipcRenderer.invoke('save-options', options),
+  saveFieldSchema: (fieldSchema) => ipcRenderer.invoke('save-field-schema', fieldSchema),
+  saveCategories: (categories) => ipcRenderer.invoke('save-categories', categories),
   submitEntry: (tab, values) => ipcRenderer.invoke('submit-entry', { tab, values }),
   sendReportNow: (range) => ipcRenderer.invoke('send-report-now', range),
   downloadReport: (range) => ipcRenderer.invoke('download-report', range),
@@ -30,4 +33,5 @@ contextBridge.exposeInMainWorld('statusApp', {
   getConnectionConfig: () => ipcRenderer.invoke('get-connection-config'),
   saveConnectionConfig: (conn) => ipcRenderer.invoke('save-connection-config', conn),
   openConnectionSettings: () => ipcRenderer.invoke('open-connection-settings'),
+  openManageScreen: () => ipcRenderer.invoke('open-manage-screen'),
 });

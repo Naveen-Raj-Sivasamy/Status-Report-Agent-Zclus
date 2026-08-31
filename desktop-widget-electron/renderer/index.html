@@ -614,6 +614,7 @@
     els.main.style.minHeight = ''; // see the comment on `main` in <style> above
     els.main.innerHTML = `
       <button class="tab-btn" id="clear-cache-btn">Refresh tabs &amp; fields (clear cache)</button>
+      <button class="tab-btn" id="manage-fields-btn">Manage fields &amp; options</button>
       <button class="tab-btn" id="connection-settings-btn">Change organization connection</button>
       <button class="secondary" id="settings-back-btn" style="width:100%; margin-top:10px;">Back</button>
     `;
@@ -623,6 +624,10 @@
     // it handles its own password prompt/editing entirely on its own, so
     // there's nothing further to do here once it's open.
     document.getElementById('connection-settings-btn').onclick = () => window.statusApp.openConnectionSettings();
+    // Same idea, its own separate window (manage.html) — password-gated
+    // (same admin password), lets you add/edit/delete dropdown options,
+    // field types, and categories without ever opening the Sheet.
+    document.getElementById('manage-fields-btn').onclick = () => window.statusApp.openManageScreen();
 
     document.getElementById('clear-cache-btn').onclick = async () => {
       showLoading('Clearing cache…');

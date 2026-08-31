@@ -1,0 +1,413 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Manage Fields &amp; Options</title>
+<style>
+  html, body {
+    margin: 0;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #6e1b2c;
+    color: #ffffff;
+  }
+  body { padding: 20px 24px 32px; box-sizing: border-box; }
+  h2 { margin: 0 0 6px; font-size: 17px; font-weight: 700; }
+  h3 { margin: 0 0 4px; font-size: 14px; font-weight: 700; color: #ffe9c7; }
+  p.hint { margin: 0 0 14px; font-size: 11.5px; color: #f3d9de; font-weight: 600; line-height: 1.4; }
+  .field-label {
+    font-size: 10.5px; color: #e8c9cf; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 5px;
+  }
+  input, select {
+    padding: 8px 10px; border-radius: 8px; border: none;
+    font-size: 12.5px; background: #ffffff; color: #2a2020; box-sizing: border-box;
+  }
+  input:focus, select:focus { outline: 2px solid #ffb700; }
+  button {
+    background: #ffb700; color: #2a2020; border: none;
+    padding: 9px 14px; border-radius: 8px; font-weight: 700; font-size: 12.5px;
+    cursor: pointer;
+  }
+  button:hover { background: #ffc633; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  button.secondary { background: transparent; color: #e8c9cf; border: 1px solid rgba(255,255,255,0.35); }
+  button.secondary:hover { color: #ffffff; border-color: #ffffff; }
+  button.icon-btn { background: rgba(255,255,255,0.14); color: #ffffff; padding: 5px 10px; border-radius: 6px; font-size: 12px; white-space: nowrap; }
+  button.icon-btn:hover { background: rgba(255,255,255,0.24); }
+  .section { background: rgba(255,255,255,0.06); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .group { background: rgba(255,255,255,0.07); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+  .group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .group-header input { flex: 1; }
+  .opt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .opt-row input { flex: 1; }
+  .fs-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .fs-row select, .fs-row input { flex: 1 1 110px; min-width: 90px; }
+  .row-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .err { color: #ffd4d4; font-size: 11px; font-weight: 700; margin-top: 8px; min-height: 14px; }
+  .ok { color: #c9f7d1; font-size: 11px; font-weight: 700; margin-top: 8px; min-height: 14px; }
+  .hidden { display: none !important; }
+  hr { border: none; border-top: 1px solid rgba(255,255,255,0.18); margin: 6px 0 16px; }
+  .cat-tabs { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 0; }
+  .cat-tabs label { font-size: 12px; display: flex; align-items: center; gap: 5px; }
+  #gate { max-width: 380px; margin: 40px auto 0; text-align: center; }
+  #gate input { width: 100%; margin-bottom: 12px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+  <div id="gate">
+    <h2>Enter Admin Password</h2>
+    <p class="hint">Managing fields, options, and categories needs the admin password that was set when this app was first configured.</p>
+    <div class="field-label">Password</div>
+    <input id="gate-password" type="password" />
+    <button id="gate-continue">Continue</button>
+    <div class="err" id="gate-err"></div>
+  </div>
+
+  <div id="content" class="hidden">
+    <h2>Manage Fields &amp; Options</h2>
+    <p class="hint">Changes save straight to your connected Sheet — no code, no redeploy. Each section below saves independently.</p>
+
+    <div class="section">
+      <h3>Dropdown &amp; Multiselect Options</h3>
+      <p class="hint">One group per OptionsKey (e.g. "SITES", "Leave.Type") — referenced from a field's Type below.</p>
+      <div id="options-groups"></div>
+      <div class="row-actions">
+        <button class="secondary" id="add-option-key-btn">+ Add option list</button>
+        <button id="save-options-btn">Save Options</button>
+      </div>
+      <div class="err" id="options-err"></div>
+      <div class="ok" id="options-ok"></div>
+    </div>
+
+    <div class="section">
+      <h3>Field Types</h3>
+      <p class="hint">Which fields get a dropdown/date/checkbox/etc. A field left out here is just plain text. BasedOn is only used by "week-auto" (the Date column's header); OptionsKey is only used by select/multiselect.</p>
+      <div id="fs-rows"></div>
+      <div class="row-actions">
+        <button class="secondary" id="add-fs-row-btn">+ Add field</button>
+        <button id="save-fs-btn">Save Field Types</button>
+      </div>
+      <div class="err" id="fs-err"></div>
+      <div class="ok" id="fs-ok"></div>
+    </div>
+
+    <div class="section">
+      <h3>Landing-Screen Categories</h3>
+      <p class="hint">Group tabs under a category button. A tab left unchecked everywhere still shows, just ungrouped.</p>
+      <div id="cat-groups"></div>
+      <div class="row-actions">
+        <button class="secondary" id="add-category-btn">+ Add category</button>
+        <button id="save-categories-btn">Save Categories</button>
+      </div>
+      <div class="err" id="cat-err"></div>
+      <div class="ok" id="cat-ok"></div>
+    </div>
+
+    <button class="secondary" id="close-btn" style="width:100%;">Close</button>
+  </div>
+
+<script>
+  let liveTabs = [];
+  let optionsMap = {};
+  let fieldSchemaMap = {};
+  let categoriesMap = {};
+
+  // Mirrors _FieldSchema's actual supported Type values exactly — see
+  // buildFieldInput() in index.html and the _Features guide tab. '' means
+  // "no row at all", i.e. plain text — never written back as a real row.
+  const FIELD_TYPES = ['', 'select', 'multiselect', 'checkbox', 'date', 'week-auto', 'sequence'];
+
+  async function init() {
+    const hasConfig = await window.statusApp.hasConnectionConfig();
+    if (!hasConfig) {
+      document.getElementById('gate').innerHTML =
+        '<p class="err">No admin password is set up yet — open Settings -> "Change organization connection" first.</p>';
+      return;
+    }
+    document.getElementById('gate-password').focus();
+  }
+
+  document.getElementById('gate-continue').addEventListener('click', async () => {
+    const pwInput = document.getElementById('gate-password');
+    const errEl = document.getElementById('gate-err');
+    const pw = pwInput.value;
+    if (!pw) { errEl.textContent = 'Enter the admin password.'; return; }
+    const btn = document.getElementById('gate-continue');
+    btn.disabled = true;
+    const ok = await window.statusApp.verifyAdminPassword(pw);
+    btn.disabled = false;
+    if (!ok) { errEl.textContent = 'Incorrect password.'; return; }
+    await loadAndShowContent();
+  });
+  document.getElementById('gate-password').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('gate-continue').click();
+  });
+
+  async function loadAndShowContent() {
+    document.getElementById('gate').classList.add('hidden');
+    document.getElementById('content').classList.remove('hidden');
+    const [tabsRes, optsRes, fsRes, catRes] = await Promise.all([
+      window.statusApp.getTabs(),
+      window.statusApp.getOptions(),
+      window.statusApp.getFieldSchema(),
+      window.statusApp.getCategories(),
+    ]);
+    liveTabs = (tabsRes && tabsRes.tabs) || [];
+    optionsMap = (optsRes && optsRes.options) || {};
+    fieldSchemaMap = (fsRes && fsRes.fieldSchema) || {};
+    categoriesMap = (catRes && catRes.categories) || {};
+    renderOptions();
+    renderFieldSchema();
+    renderCategories();
+  }
+
+  async function saveSection(btnId, errId, okId, action) {
+    const btn = document.getElementById(btnId);
+    const errEl = document.getElementById(errId);
+    const okEl = document.getElementById(okId);
+    errEl.textContent = '';
+    okEl.textContent = '';
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Saving…';
+    try {
+      const result = await action();
+      if (!result || result.ok === false) throw new Error((result && result.error) || 'Save failed.');
+      okEl.textContent = 'Saved.';
+    } catch (err) {
+      errEl.textContent = err.message || String(err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  // -------------------- Options --------------------
+
+  function renderOptions() {
+    const container = document.getElementById('options-groups');
+    container.innerHTML = '';
+    Object.keys(optionsMap).forEach((key) => container.appendChild(buildOptionGroup(key, optionsMap[key])));
+  }
+
+  function buildOptionRow(value) {
+    const row = document.createElement('div');
+    row.className = 'opt-row';
+    const input = document.createElement('input');
+    input.value = value || '';
+    input.placeholder = 'Option value';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn';
+    del.textContent = '✕';
+    del.onclick = () => row.remove();
+    row.appendChild(input);
+    row.appendChild(del);
+    return row;
+  }
+
+  function buildOptionGroup(key, values) {
+    const group = document.createElement('div');
+    group.className = 'group';
+
+    const header = document.createElement('div');
+    header.className = 'group-header';
+    const keyInput = document.createElement('input');
+    keyInput.className = 'opt-key-input';
+    keyInput.value = key || '';
+    keyInput.placeholder = 'OptionsKey (e.g. SITES)';
+    const delKeyBtn = document.createElement('button');
+    delKeyBtn.type = 'button';
+    delKeyBtn.className = 'icon-btn';
+    delKeyBtn.textContent = '✕ Remove list';
+    delKeyBtn.onclick = () => group.remove();
+    header.appendChild(keyInput);
+    header.appendChild(delKeyBtn);
+    group.appendChild(header);
+
+    const rows = document.createElement('div');
+    rows.className = 'opt-rows';
+    (values || []).forEach((v) => rows.appendChild(buildOptionRow(v)));
+    group.appendChild(rows);
+
+    const addOptBtn = document.createElement('button');
+    addOptBtn.type = 'button';
+    addOptBtn.className = 'icon-btn';
+    addOptBtn.textContent = '+ Option';
+    addOptBtn.onclick = () => rows.appendChild(buildOptionRow(''));
+    group.appendChild(addOptBtn);
+
+    return group;
+  }
+
+  document.getElementById('add-option-key-btn').addEventListener('click', () => {
+    document.getElementById('options-groups').appendChild(buildOptionGroup('', []));
+  });
+
+  document.getElementById('save-options-btn').addEventListener('click', async () => {
+    const groups = Array.from(document.querySelectorAll('#options-groups .group'));
+    const map = {};
+    groups.forEach((g) => {
+      const key = g.querySelector('.opt-key-input').value.trim();
+      if (!key) return;
+      const values = Array.from(g.querySelectorAll('.opt-row input')).map((i) => i.value.trim()).filter(Boolean);
+      map[key] = values;
+    });
+    await saveSection('save-options-btn', 'options-err', 'options-ok', () => window.statusApp.saveOptions(map));
+    optionsMap = map;
+  });
+
+  // -------------------- Field Types --------------------
+
+  function renderFieldSchema() {
+    const container = document.getElementById('fs-rows');
+    container.innerHTML = '';
+    Object.keys(fieldSchemaMap).forEach((tab) => {
+      const cols = fieldSchemaMap[tab] || {};
+      Object.keys(cols).forEach((col) => container.appendChild(buildFsRow(tab, col, cols[col])));
+    });
+  }
+
+  function buildFsRow(tab, column, spec) {
+    spec = spec || {};
+    const row = document.createElement('div');
+    row.className = 'fs-row';
+
+    const tabSel = document.createElement('select');
+    tabSel.className = 'fs-tab';
+    const blankTabOpt = document.createElement('option');
+    blankTabOpt.value = '';
+    blankTabOpt.textContent = '— tab —';
+    tabSel.appendChild(blankTabOpt);
+    liveTabs.forEach((t) => {
+      const o = document.createElement('option');
+      o.value = t;
+      o.textContent = t;
+      tabSel.appendChild(o);
+    });
+    tabSel.value = tab || '';
+
+    const colInput = document.createElement('input');
+    colInput.className = 'fs-col';
+    colInput.placeholder = 'Column';
+    colInput.value = column || '';
+
+    const typeSel = document.createElement('select');
+    typeSel.className = 'fs-type';
+    FIELD_TYPES.forEach((t) => {
+      const o = document.createElement('option');
+      o.value = t;
+      o.textContent = t || '(plain text)';
+      typeSel.appendChild(o);
+    });
+    typeSel.value = spec.type || '';
+
+    const optKeyInput = document.createElement('input');
+    optKeyInput.className = 'fs-optkey';
+    optKeyInput.placeholder = 'OptionsKey';
+    optKeyInput.value = spec.optionsKey || '';
+
+    const basedOnInput = document.createElement('input');
+    basedOnInput.className = 'fs-basedon';
+    basedOnInput.placeholder = 'BasedOn (week-auto)';
+    basedOnInput.value = spec.basedOn || '';
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn';
+    del.textContent = '✕';
+    del.onclick = () => row.remove();
+
+    [tabSel, colInput, typeSel, optKeyInput, basedOnInput, del].forEach((el) => row.appendChild(el));
+    return row;
+  }
+
+  document.getElementById('add-fs-row-btn').addEventListener('click', () => {
+    document.getElementById('fs-rows').appendChild(buildFsRow('', '', {}));
+  });
+
+  document.getElementById('save-fs-btn').addEventListener('click', async () => {
+    const rows = Array.from(document.querySelectorAll('#fs-rows .fs-row'));
+    const map = {};
+    rows.forEach((r) => {
+      const tab = r.querySelector('.fs-tab').value.trim();
+      const column = r.querySelector('.fs-col').value.trim();
+      const type = r.querySelector('.fs-type').value.trim();
+      if (!tab || !column || !type) return;
+      const optionsKey = r.querySelector('.fs-optkey').value.trim();
+      const basedOn = r.querySelector('.fs-basedon').value.trim();
+      if (!map[tab]) map[tab] = {};
+      map[tab][column] = { type, optionsKey, basedOn };
+    });
+    await saveSection('save-fs-btn', 'fs-err', 'fs-ok', () => window.statusApp.saveFieldSchema(map));
+    fieldSchemaMap = map;
+  });
+
+  // -------------------- Categories --------------------
+
+  function renderCategories() {
+    const container = document.getElementById('cat-groups');
+    container.innerHTML = '';
+    Object.keys(categoriesMap).forEach((cat) => container.appendChild(buildCategoryGroup(cat, categoriesMap[cat])));
+  }
+
+  function buildCategoryGroup(name, tabs) {
+    const group = document.createElement('div');
+    group.className = 'group';
+
+    const header = document.createElement('div');
+    header.className = 'group-header';
+    const nameInput = document.createElement('input');
+    nameInput.className = 'cat-name-input';
+    nameInput.value = name || '';
+    nameInput.placeholder = 'Category name';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn';
+    del.textContent = '✕ Remove category';
+    del.onclick = () => group.remove();
+    header.appendChild(nameInput);
+    header.appendChild(del);
+    group.appendChild(header);
+
+    const tabsWrap = document.createElement('div');
+    tabsWrap.className = 'cat-tabs';
+    const selected = new Set(tabs || []);
+    liveTabs.forEach((t) => {
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = t;
+      cb.checked = selected.has(t);
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + t));
+      tabsWrap.appendChild(label);
+    });
+    group.appendChild(tabsWrap);
+
+    return group;
+  }
+
+  document.getElementById('add-category-btn').addEventListener('click', () => {
+    document.getElementById('cat-groups').appendChild(buildCategoryGroup('', []));
+  });
+
+  document.getElementById('save-categories-btn').addEventListener('click', async () => {
+    const groups = Array.from(document.querySelectorAll('#cat-groups .group'));
+    const map = {};
+    groups.forEach((g) => {
+      const name = g.querySelector('.cat-name-input').value.trim();
+      if (!name) return;
+      const tabs = Array.from(g.querySelectorAll('.cat-tabs input[type=checkbox]:checked')).map((c) => c.value);
+      if (tabs.length) map[name] = tabs;
+    });
+    await saveSection('save-categories-btn', 'cat-err', 'cat-ok', () => window.statusApp.saveCategories(map));
+    categoriesMap = map;
+  });
+
+  document.getElementById('close-btn').addEventListener('click', () => window.close());
+
+  init();
+</script>
+</body>
+</html>

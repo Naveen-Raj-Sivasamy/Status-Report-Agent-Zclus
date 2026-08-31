@@ -10,14 +10,21 @@
     background: #6e1b2c;
     color: #ffffff;
   }
-  body { display: flex; flex-direction: column; padding: 0; box-sizing: border-box; }
-  /* Frameless window (see main.js) — this replaces the native OS title
-     bar, which rendered as a plain white/blue bar that never matched the
-     app's own maroon branding anywhere else. */
+  body {
+    display: flex; flex-direction: column; padding: 0; box-sizing: border-box;
+    /* Frameless window (see main.js) — draggable from anywhere on the
+       background, not just the title bar strip, since that was the only
+       place a click-drag actually moved the window otherwise. Every real
+       control below gets its own no-drag override so this doesn't break
+       clicking/typing into any of them. */
+    -webkit-app-region: drag;
+  }
+  input, button, a {
+    -webkit-app-region: no-drag;
+  }
   .titlebar {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 14px; flex: 0 0 auto;
-    -webkit-app-region: drag;
   }
   .titlebar-title { font-size: 12px; font-weight: 700; color: #f3d9de; letter-spacing: 0.3px; white-space: nowrap; }
   .titlebar-close {

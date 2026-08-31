@@ -672,10 +672,15 @@ function sendFridayReminder() {
 
   var teamsWebhookUrl = getTeamsWebhookUrl();
   if (teamsWebhookUrl) {
+    // buildAdaptiveCardPayload_(), not a plain {text: ...} — see its own
+    // comment (near PENDING_TEAMS_GROUPS_PROP) for why: the same shape
+    // Weekly Connect's Teams post uses, confirmed against a real failure
+    // from a webhook backed by Teams' current Workflows/Power Automate
+    // route rather than the older Connectors/Incoming Webhook one.
     UrlFetchApp.fetch(teamsWebhookUrl, {
       method: 'post',
       contentType: 'application/json',
-      payload: JSON.stringify({ text: '⏰ ' + subject + ' — ' + ss.getUrl() }),
+      payload: JSON.stringify(buildAdaptiveCardPayload_('⏰ ' + subject + ' — ' + ss.getUrl())),
       muteHttpExceptions: true,
     });
   }
@@ -1196,6 +1201,31 @@ function getCurrentConnectWeekRange() {
 // through the same comma-list helper every other list property uses.
 var PENDING_TEAMS_GROUPS_PROP = 'PENDING_WEEKLY_CONNECT_TEAMS_GROUPS';
 
+/** Wraps `text` (already the same lightweight-Markdown shape richtext
+ * fields produce — bold markers, bullet lines, [link](url) — which
+ * Adaptive Cards' TextBlock understands a limited version of natively)
+ * into a minimal Adaptive Card — the shape Teams' current "Post to a
+ * channel when a webhook request is received" Workflow template (the
+ * modern replacement for the old Connectors/Incoming Webhook route — see
+ * the README) actually expects, confirmed against a real failure: sending
+ * a plain {text: ...} body got back "Property 'type' must be
+ * 'AdaptiveCard'" from the flow's Post-card action, which deserializes
+ * the request body directly as a card. If your webhook is a genuinely
+ * classic Incoming Webhook instead (rare now — Microsoft has been
+ * steering everyone toward Workflows), it likely expects the older
+ * {text: ...} shape instead; this is the one place to change that back
+ * if so. */
+function buildAdaptiveCardPayload_(text) {
+  return {
+    type: 'AdaptiveCard',
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    body: [
+      { type: 'TextBlock', text: text, wrap: true },
+    ],
+  };
+}
+
 /** Queues `groupName` for a Teams post and schedules a one-time trigger to
  * actually send it, instead of calling postWeeklyConnectToTeams() right
  * here — UrlFetchApp.fetch() is a blocking call with no true async/
@@ -1236,8 +1266,18 @@ function runScheduledWeeklyConnectTeamsPosts_() {
   var props = PropertiesService.getScriptProperties();
   var pending = getScriptPropList_(PENDING_TEAMS_GROUPS_PROP);
   props.deleteProperty(PENDING_TEAMS_GROUPS_PROP);
+  // Each group posted independently, wrapped here (not just inside
+  // postWeeklyConnectToTeams()'s own narrower try/catch around the actual
+  // fetch) — an error anywhere in ONE group's post (a bad date, a sheet
+  // read failure, anything) used to propagate straight out of this
+  // forEach and skip every group after it, AND skip the trigger-cleanup
+  // step below entirely, since both come after the throw.
   pending.forEach(function (key) {
-    postWeeklyConnectToTeams(key === '__legacy__' ? '' : key);
+    try {
+      postWeeklyConnectToTeams(key === '__legacy__' ? '' : key);
+    } catch (err) {
+      Logger.log('runScheduledWeeklyConnectTeamsPosts_ failed for group "' + key + '": ' + err);
+    }
   });
 
   ScriptApp.getProjectTriggers().forEach(function (t) {
@@ -1292,13 +1332,27 @@ function postWeeklyConnectToTeams(groupName) {
     (lines.length ? lines.join('\n\n') : '_Nothing logged yet this week._');
 
   try {
-    UrlFetchApp.fetch(teamsWebhookUrl, {
+    var response = UrlFetchApp.fetch(teamsWebhookUrl, {
       method: 'post',
       contentType: 'application/json',
-      payload: JSON.stringify({ text: text }),
-      muteHttpExceptions: true,
+      payload: JSON.stringify(buildAdaptiveCardPayload_(text)),
+      muteHttpExceptions: true, // so a non-2xx response lands here to inspect, instead of throwing
     });
+    var statusCode = response.getResponseCode();
+    // muteHttpExceptions means a wrong payload shape (e.g. a Power Automate
+    // flow expecting different field names than the plain {text: ...} this
+    // sends) fails SILENTLY otherwise — no exception, nothing in the
+    // widget, nothing anywhere the ticket got saved successfully. Writing
+    // the outcome to _Config makes it checkable directly in the Sheet,
+    // without needing to open Apps Script's Executions log.
+    setConfigValue(
+      'LastTeamsPostStatus',
+      (statusCode >= 200 && statusCode < 300 ? 'OK' : 'FAILED') + ' (' + statusCode + ') — ' +
+        heading + ' — ' + new Date().toISOString() +
+        (statusCode >= 200 && statusCode < 300 ? '' : ' — response: ' + response.getContentText().slice(0, 300))
+    );
   } catch (err) {
+    setConfigValue('LastTeamsPostStatus', 'ERROR — ' + heading + ' — ' + new Date().toISOString() + ' — ' + err);
     Logger.log('postWeeklyConnectToTeams failed: ' + err);
   }
 }

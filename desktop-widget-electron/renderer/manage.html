@@ -167,7 +167,7 @@
 
     <div class="section">
       <h3>Field Types</h3>
-      <p class="hint">Which fields get a dropdown/date/checkbox/etc. A field left out here is just plain text. BasedOn is only used by "week-auto" (the Date column's header); OptionsKey is only used by select/multiselect.</p>
+      <p class="hint">Which fields get a dropdown/date/checkbox/etc. A field left off here is just plain text — that's fine, most fields don't need anything special.</p>
       <div id="fs-rows"></div>
       <div class="row-actions">
         <button class="secondary" id="add-fs-row-btn">+ Add field</button>
@@ -434,19 +434,55 @@
 
   // -------------------- Field Types --------------------
 
+  // Fields grouped under a small heading per tab (not one long undifferentiated
+  // list) — this used to render every field across every tab as identical
+  // flat rows with no visual separation, which was the main source of
+  // confusion: no way to tell at a glance which tab a given row belonged to.
   function renderFieldSchema() {
     const container = document.getElementById('fs-rows');
     container.innerHTML = '';
     Object.keys(fieldSchemaMap).forEach((tab) => {
       const cols = fieldSchemaMap[tab] || {};
-      Object.keys(cols).forEach((col) => container.appendChild(buildFsRow(tab, col, cols[col])));
+      const colNames = Object.keys(cols);
+      if (!colNames.length) return;
+      const heading = document.createElement('div');
+      heading.className = 'field-label';
+      heading.style.cssText = 'margin-top:10px; font-size:11px;';
+      heading.textContent = tab;
+      container.appendChild(heading);
+      colNames.forEach((col) => container.appendChild(buildFsRow(tab, col, cols[col])));
     });
   }
 
+  // One card per field — a Tab/Column/Type header row, plus a second row
+  // that only appears when it's actually relevant to the chosen Type
+  // (Options list for select/multiselect, Based-on for week-auto) instead
+  // of always showing both regardless, which is what made this confusing:
+  // two inputs visible on every single field, useless for the vast
+  // majority of them. Column is a real dropdown of that tab's actual sheet
+  // columns (fetched via getColumns) instead of a free-text field a typo
+  // could silently break.
   function buildFsRow(tab, column, spec) {
     spec = spec || {};
     const row = document.createElement('div');
-    row.className = 'fs-row';
+    row.className = 'fs-row group';
+    row.style.display = 'block'; // override .fs-row's own display:flex — this card lays itself out internally instead
+
+    const header = document.createElement('div');
+    header.className = 'group-header';
+
+    function labeled(labelText, el) {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'flex:1 1 120px; min-width:100px;';
+      const label = document.createElement('div');
+      label.className = 'field-label';
+      label.style.marginBottom = '3px';
+      label.textContent = labelText;
+      el.style.width = '100%';
+      wrap.appendChild(label);
+      wrap.appendChild(el);
+      return wrap;
+    }
 
     const tabSel = document.createElement('select');
     tabSel.className = 'fs-tab';
@@ -462,10 +498,36 @@
     });
     tabSel.value = tab || '';
 
-    const colInput = document.createElement('input');
-    colInput.className = 'fs-col';
-    colInput.placeholder = 'Column';
-    colInput.value = column || '';
+    const colSel = document.createElement('select');
+    colSel.className = 'fs-col';
+
+    async function populateColumns(selectedTab, currentColumn) {
+      colSel.innerHTML = '';
+      if (!selectedTab) {
+        colSel.appendChild(new Option('— choose a tab first —', ''));
+        return;
+      }
+      colSel.appendChild(new Option('Loading…', ''));
+      let cols = [];
+      try {
+        const res = await window.statusApp.getColumns(selectedTab);
+        cols = (res && res.columns) || [];
+      } catch {
+        cols = [];
+      }
+      colSel.innerHTML = '';
+      colSel.appendChild(new Option('— column —', ''));
+      cols.forEach((c) => colSel.appendChild(new Option(c, c)));
+      // The saved column might not be on the live sheet any more (renamed
+      // or removed) — keep it selectable so saving doesn't silently drop
+      // it, but flag that clearly instead of pretending it's a real column.
+      if (currentColumn && cols.indexOf(currentColumn) === -1) {
+        colSel.appendChild(new Option(currentColumn + ' (not found on sheet)', currentColumn));
+      }
+      colSel.value = currentColumn || '';
+    }
+    populateColumns(tab, column);
+    tabSel.onchange = () => populateColumns(tabSel.value, '');
 
     const typeSel = document.createElement('select');
     typeSel.className = 'fs-type';
@@ -477,23 +539,47 @@
     });
     typeSel.value = spec.type || '';
 
-    const optKeyInput = document.createElement('input');
-    optKeyInput.className = 'fs-optkey';
-    optKeyInput.placeholder = 'OptionsKey';
-    optKeyInput.value = spec.optionsKey || '';
-
-    const basedOnInput = document.createElement('input');
-    basedOnInput.className = 'fs-basedon';
-    basedOnInput.placeholder = 'BasedOn (week-auto)';
-    basedOnInput.value = spec.basedOn || '';
-
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'icon-btn';
     del.textContent = '✕';
+    del.title = 'Remove this field';
     del.onclick = () => row.remove();
 
-    [tabSel, colInput, typeSel, optKeyInput, basedOnInput, del].forEach((el) => row.appendChild(el));
+    header.appendChild(labeled('Tab', tabSel));
+    header.appendChild(labeled('Column', colSel));
+    header.appendChild(labeled('Type', typeSel));
+    header.appendChild(del);
+    row.appendChild(header);
+
+    const optKeyInput = document.createElement('input');
+    optKeyInput.className = 'fs-optkey';
+    optKeyInput.placeholder = 'e.g. SITES';
+    optKeyInput.value = spec.optionsKey || '';
+    const optKeyWrap = labeled('Options list (from "Dropdown & Multiselect Options" above)', optKeyInput);
+
+    const basedOnInput = document.createElement('input');
+    basedOnInput.className = 'fs-basedon';
+    basedOnInput.placeholder = 'e.g. Date';
+    basedOnInput.value = spec.basedOn || '';
+    const basedOnWrap = labeled('Based on column', basedOnInput);
+
+    const subRow = document.createElement('div');
+    subRow.className = 'opt-row';
+    subRow.style.marginTop = '8px';
+    subRow.appendChild(optKeyWrap);
+    subRow.appendChild(basedOnWrap);
+    row.appendChild(subRow);
+
+    function updateVisibility() {
+      const t = typeSel.value;
+      optKeyWrap.style.display = (t === 'select' || t === 'multiselect') ? '' : 'none';
+      basedOnWrap.style.display = t === 'week-auto' ? '' : 'none';
+      subRow.style.display = (optKeyWrap.style.display === 'none' && basedOnWrap.style.display === 'none') ? 'none' : 'flex';
+    }
+    typeSel.onchange = updateVisibility;
+    updateVisibility();
+
     return row;
   }
 

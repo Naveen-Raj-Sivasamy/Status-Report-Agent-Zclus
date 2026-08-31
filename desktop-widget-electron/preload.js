@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld('statusApp', {
   getSessionStatus: () => ipcRenderer.invoke('get-session-status'),
   login: (username, password) => ipcRenderer.invoke('login', { username, password }),
   logout: () => ipcRenderer.invoke('logout'),
+  listUsers: () => ipcRenderer.invoke('list-users'),
+  createUser: (username, password, role) => ipcRenderer.invoke('create-user', { username, password, role }),
+  resetUserPassword: (username, newPassword) => ipcRenderer.invoke('reset-user-password', { username, newPassword }),
+  setUserActive: (username, active) => ipcRenderer.invoke('set-user-active', { username, active }),
+  setUserRole: (username, role) => ipcRenderer.invoke('set-user-role', { username, role }),
   getWeeklyConnectTickets: () => ipcRenderer.invoke('get-weekly-connect-tickets'),
   updateWeeklyConnectTicket: (ticketId, status, comments) =>
     ipcRenderer.invoke('update-weekly-connect-ticket', { ticketId, status, comments }),

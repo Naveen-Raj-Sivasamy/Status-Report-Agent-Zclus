@@ -689,7 +689,7 @@ function createConnectWindow() {
 ipcMain.handle('get-session-status', async () => {
   var saved = loadUserConfig();
   if (saved.sessionToken) {
-    return { loggedIn: true, username: saved.sessionUsername || '' };
+    return { loggedIn: true, username: saved.sessionUsername || '', role: saved.sessionRole || '' };
   }
   // No local session yet — check whether an account now exists for the
   // name already saved on this machine. This is what makes rollout to
@@ -716,7 +716,7 @@ ipcMain.handle('login', async (_e, { username, password }) => {
     // exponential backoff before the person even sees "wrong password".
     var result = await apiPostBody({ action: 'login', username, password }, { attempts: 1 });
     if (result && result.sessionToken) {
-      saveUserConfig({ sessionToken: result.sessionToken, sessionUsername: result.username });
+      saveUserConfig({ sessionToken: result.sessionToken, sessionUsername: result.username, sessionRole: result.role });
     }
     return result;
   } catch (err) {
@@ -725,7 +725,35 @@ ipcMain.handle('login', async (_e, { username, password }) => {
 });
 
 ipcMain.handle('logout', () => {
-  saveUserConfig({ sessionToken: '', sessionUsername: '' });
+  saveUserConfig({ sessionToken: '', sessionUsername: '', sessionRole: '' });
+});
+
+// -------------------- Manage Users (admin-only) --------------------
+//
+// Each of these needs a valid Admin session — enforced server-side (see
+// requireAdminSession_ in Code.gs), not just by hiding the button here.
+// The session token is whatever's already stored from the login above
+// (shared with the main popup's login gate — one identity per machine,
+// not a separate credential to manage): the renderer never handles the
+// token directly, same as it never sees TOKEN/WEBHOOK_URL raw either.
+function adminSessionToken_() {
+  return loadUserConfig().sessionToken || '';
+}
+
+ipcMain.handle('list-users', async () => {
+  return apiPostBody({ action: 'listUsers', sessionToken: adminSessionToken_() }).catch((err) => ({ ok: false, error: err.message }));
+});
+ipcMain.handle('create-user', async (_e, { username, password, role }) => {
+  return apiPostBody({ action: 'createUser', sessionToken: adminSessionToken_(), username, password, role }).catch((err) => ({ ok: false, error: err.message }));
+});
+ipcMain.handle('reset-user-password', async (_e, { username, newPassword }) => {
+  return apiPostBody({ action: 'resetUserPassword', sessionToken: adminSessionToken_(), username, newPassword }).catch((err) => ({ ok: false, error: err.message }));
+});
+ipcMain.handle('set-user-active', async (_e, { username, active }) => {
+  return apiPostBody({ action: 'setUserActive', sessionToken: adminSessionToken_(), username, active }).catch((err) => ({ ok: false, error: err.message }));
+});
+ipcMain.handle('set-user-role', async (_e, { username, role }) => {
+  return apiPostBody({ action: 'setUserRole', sessionToken: adminSessionToken_(), username, role }).catch((err) => ({ ok: false, error: err.message }));
 });
 
 // -------------------- in-app "Manage Fields & Options" --------------------

@@ -540,15 +540,8 @@ function doPost(e) {
         // Refuse to deactivate the last remaining active admin — the one
         // way this app could otherwise permanently lock everyone out of
         // user management, with no other admin left to undo it.
-        if (!body.active && targetRec['Role'] === 'Admin') {
-          var otherActiveAdmins = activeData.rows.filter(function (row, i) {
-            if (i === activeIdx) return false;
-            var r = rowToUserRecord_(activeData.headers, row);
-            return r['Role'] === 'Admin' && isActiveValue_(r['Active']);
-          }).length;
-          if (otherActiveAdmins === 0) {
-            return jsonOut({ ok: false, error: 'Can\'t deactivate the only remaining admin account.' });
-          }
+        if (!body.active && targetRec['Role'] === 'Admin' && countOtherActiveAdmins_(activeData, activeIdx) === 0) {
+          return jsonOut({ ok: false, error: 'Can\'t deactivate the only remaining admin account.' });
         }
         var activeCol = findColumnIndex(activeData.headers, 'Active');
         activeData.sheet.getRange(activeIdx + 2, activeCol + 1).setValue(body.active ? 'TRUE' : 'FALSE');
@@ -556,6 +549,33 @@ function doPost(e) {
         activeLock.releaseLock();
       }
       return jsonOut({ ok: true, message: body.active ? 'Account reactivated.' : 'Account deactivated.' });
+    }
+    if (body.action === 'setUserRole') {
+      var roleAuth = requireAdminSession_(body);
+      if (roleAuth.error) return jsonOut({ ok: false, error: roleAuth.error });
+      if (!body.username || (body.role !== 'Admin' && body.role !== 'User')) {
+        return jsonOut({ ok: false, error: 'Username and a valid role (Admin/User) are required.' });
+      }
+      var roleLock = LockService.getScriptLock();
+      if (!roleLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        var roleData = usersSheetRows_();
+        var roleIdx = findUserRowIndex_(roleData.headers, roleData.rows, body.username);
+        if (roleIdx === -1) return jsonOut({ ok: false, error: 'No such account: ' + body.username });
+        var roleTargetRec = rowToUserRecord_(roleData.headers, roleData.rows[roleIdx]);
+        // Same guard as setUserActive, same reason — demoting the last
+        // admin to User is just as much a lockout as deactivating them.
+        if (body.role === 'User' && roleTargetRec['Role'] === 'Admin' && countOtherActiveAdmins_(roleData, roleIdx) === 0) {
+          return jsonOut({ ok: false, error: 'Can\'t demote the only remaining admin account.' });
+        }
+        var roleCol = findColumnIndex(roleData.headers, 'Role');
+        roleData.sheet.getRange(roleIdx + 2, roleCol + 1).setValue(body.role);
+      } finally {
+        roleLock.releaseLock();
+      }
+      return jsonOut({ ok: true, message: 'Role updated.' });
     }
 
     /** Called by the build-release CI workflow right after it publishes a
@@ -1390,6 +1410,18 @@ function requireAdminSession_(body) {
   if (!session) return { error: 'Please log in again.' };
   if (session.role !== 'Admin') return { error: 'Admin access required.' };
   return { session: session };
+}
+
+/** How many OTHER active admins exist besides the row at `excludeIdx` —
+ * shared by setUserActive's deactivate guard and setUserRole's demote
+ * guard, same reasoning both times: either one is a way to end up with
+ * zero admins and no one left who can undo it. */
+function countOtherActiveAdmins_(data, excludeIdx) {
+  return data.rows.filter(function (row, i) {
+    if (i === excludeIdx) return false;
+    var r = rowToUserRecord_(data.headers, row);
+    return r['Role'] === 'Admin' && isActiveValue_(r['Active']);
+  }).length;
 }
 
 /** Every account, minus PasswordHash/Salt — those never leave the server,

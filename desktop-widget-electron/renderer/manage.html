@@ -112,6 +112,35 @@
     <div class="err" id="gate-err"></div>
   </div>
 
+  <!-- Independent of the password gate above on purpose — Team Accounts
+       is authenticated by a real admin login (username + password,
+       checked server-side), not the old per-machine password, and works
+       even on installs where that old password was never set up (the
+       common case for anyone using the pre-baked installer — see the
+       hint above the password gate itself: this is what replaces it). -->
+  <div class="section" id="users-section" style="max-width:380px; margin:24px auto 0;">
+    <h3>Team Accounts</h3>
+    <p class="hint">Who can log into this app, and who's an admin. Log in with your own admin account below — separate from the password above.</p>
+
+    <div id="users-gate">
+      <div class="field-label">Admin username</div>
+      <input id="users-login-username" type="text" style="width:100%; margin-bottom:8px;" />
+      <div class="field-label">Password</div>
+      <input id="users-login-password" type="password" style="width:100%; margin-bottom:8px;" />
+      <button id="users-login-btn">Log in</button>
+      <div class="err" id="users-login-err"></div>
+    </div>
+
+    <div id="users-content" class="hidden">
+      <div id="users-list"></div>
+      <div class="row-actions">
+        <button class="secondary" id="add-user-btn">+ Add account</button>
+      </div>
+      <div class="err" id="users-err"></div>
+      <div class="ok" id="users-ok"></div>
+    </div>
+  </div>
+
   <div id="content" class="hidden">
     <h2>Manage Fields &amp; Options</h2>
     <p class="hint">Changes save straight to your connected Sheet — no code, no redeploy. Each section below saves independently.</p>
@@ -684,6 +713,214 @@
 
   document.getElementById('close-btn').addEventListener('click', () => window.close());
 
+  // -------------------- Team Accounts --------------------
+  // Uses the exact same session as the main popup's own login gate
+  // (window.statusApp.login/getSessionStatus) — one identity per machine,
+  // not a separate credential to set up here. Every write below is also
+  // re-checked server-side against that session (requireAdminSession_ in
+  // Code.gs), so this UI hiding/showing things is a convenience, not the
+  // actual security boundary.
+  async function initUsersSection() {
+    const status = await window.statusApp.getSessionStatus().catch(() => null);
+    if (status && status.loggedIn && status.role === 'Admin') {
+      await showUsersContent();
+    } else if (status && status.loggedIn) {
+      document.getElementById('users-login-err').textContent =
+        `Logged in as "${status.username}", but that account isn't an admin.`;
+    }
+    // Not logged in at all — leave the login form empty, no error shown.
+  }
+
+  async function usersLoginAttempt() {
+    const uEl = document.getElementById('users-login-username');
+    const pEl = document.getElementById('users-login-password');
+    const errEl = document.getElementById('users-login-err');
+    const username = uEl.value.trim();
+    const password = pEl.value;
+    if (!username || !password) { errEl.textContent = 'Enter a username and password.'; return; }
+    errEl.textContent = '';
+    const btn = document.getElementById('users-login-btn');
+    btn.disabled = true;
+    const result = await window.statusApp.login(username, password).catch((err) => ({ ok: false, error: err.message }));
+    btn.disabled = false;
+    if (!result || !result.ok) {
+      errEl.textContent = (result && result.error) || 'Login failed.';
+      return;
+    }
+    if (result.role !== 'Admin') {
+      errEl.textContent = `"${username}" logged in, but isn't an admin account.`;
+      return;
+    }
+    pEl.value = '';
+    await showUsersContent();
+  }
+  document.getElementById('users-login-btn').addEventListener('click', usersLoginAttempt);
+  document.getElementById('users-login-password').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') usersLoginAttempt();
+  });
+
+  async function showUsersContent() {
+    document.getElementById('users-gate').classList.add('hidden');
+    document.getElementById('users-content').classList.remove('hidden');
+    await refreshUsersList();
+  }
+
+  async function refreshUsersList() {
+    const errEl = document.getElementById('users-err');
+    errEl.textContent = '';
+    const result = await window.statusApp.listUsers().catch((err) => ({ ok: false, error: err.message }));
+    if (!result || !result.ok) {
+      errEl.textContent = (result && result.error) || 'Could not load accounts.';
+      return;
+    }
+    const container = document.getElementById('users-list');
+    container.innerHTML = '';
+    (result.users || []).forEach((u) => container.appendChild(buildUserRow(u)));
+  }
+
+  function fmtDate(v) {
+    if (!v) return null;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function buildUserRow(u) {
+    const row = document.createElement('div');
+    row.className = 'group';
+
+    const header = document.createElement('div');
+    header.className = 'group-header';
+
+    const nameEl = document.createElement('input');
+    nameEl.value = u.username;
+    nameEl.readOnly = true;
+    nameEl.style.cssText = 'flex:1; background:rgba(255,255,255,0.12); color:#fff;';
+    header.appendChild(nameEl);
+
+    const roleSelect = document.createElement('select');
+    ['User', 'Admin'].forEach((r) => {
+      const opt = document.createElement('option');
+      opt.value = r;
+      opt.textContent = r;
+      if (r === u.role) opt.selected = true;
+      roleSelect.appendChild(opt);
+    });
+    roleSelect.addEventListener('change', async () => {
+      const errEl = document.getElementById('users-err');
+      const okEl = document.getElementById('users-ok');
+      errEl.textContent = '';
+      okEl.textContent = '';
+      const result = await window.statusApp.setUserRole(u.username, roleSelect.value).catch((err) => ({ ok: false, error: err.message }));
+      if (!result || !result.ok) {
+        errEl.textContent = (result && result.error) || 'Could not change role.';
+        roleSelect.value = u.role; // revert the dropdown to what's actually saved
+        return;
+      }
+      okEl.textContent = `"${u.username}" is now ${roleSelect.value}.`;
+      await refreshUsersList();
+    });
+    header.appendChild(roleSelect);
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'icon-btn';
+    toggleBtn.textContent = u.active ? 'Active — deactivate' : 'Deactivated — reactivate';
+    toggleBtn.addEventListener('click', async () => {
+      const errEl = document.getElementById('users-err');
+      const okEl = document.getElementById('users-ok');
+      errEl.textContent = '';
+      okEl.textContent = '';
+      const result = await window.statusApp.setUserActive(u.username, !u.active).catch((err) => ({ ok: false, error: err.message }));
+      if (!result || !result.ok) {
+        errEl.textContent = (result && result.error) || 'Could not update account.';
+        return;
+      }
+      okEl.textContent = `"${u.username}" ${u.active ? 'deactivated' : 'reactivated'}.`;
+      await refreshUsersList();
+    });
+    header.appendChild(toggleBtn);
+    row.appendChild(header);
+
+    const created = fmtDate(u.createdAt);
+    const lastLogin = fmtDate(u.lastLoginAt);
+    const meta = document.createElement('div');
+    meta.style.cssText = 'font-size:10.5px; color:#e8c9cf; margin-bottom:8px;';
+    meta.textContent = `Created ${created ? created.toLocaleDateString() : '—'} · Last login: ${lastLogin ? lastLogin.toLocaleString() : 'never'}`;
+    row.appendChild(meta);
+
+    const resetRow = document.createElement('div');
+    resetRow.className = 'opt-row';
+    const pwInput = document.createElement('input');
+    pwInput.type = 'password';
+    pwInput.placeholder = 'New password';
+    pwInput.style.flex = '1';
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'icon-btn';
+    resetBtn.textContent = 'Reset password';
+    resetBtn.addEventListener('click', async () => {
+      const errEl = document.getElementById('users-err');
+      const okEl = document.getElementById('users-ok');
+      errEl.textContent = '';
+      okEl.textContent = '';
+      if (!pwInput.value) { errEl.textContent = 'Enter a new password first.'; return; }
+      resetBtn.disabled = true;
+      const result = await window.statusApp.resetUserPassword(u.username, pwInput.value).catch((err) => ({ ok: false, error: err.message }));
+      resetBtn.disabled = false;
+      if (!result || !result.ok) {
+        errEl.textContent = (result && result.error) || 'Could not reset password.';
+        return;
+      }
+      pwInput.value = '';
+      okEl.textContent = `Password reset for "${u.username}".`;
+    });
+    resetRow.appendChild(pwInput);
+    resetRow.appendChild(resetBtn);
+    row.appendChild(resetRow);
+
+    return row;
+  }
+
+  document.getElementById('add-user-btn').addEventListener('click', () => {
+    const container = document.getElementById('users-list');
+    const row = document.createElement('div');
+    row.className = 'group';
+    row.innerHTML = `
+      <div class="group-header">
+        <input class="new-user-username" placeholder="Username" style="flex:1;" />
+        <select class="new-user-role"><option value="User">User</option><option value="Admin">Admin</option></select>
+      </div>
+      <div class="opt-row">
+        <input class="new-user-password" type="password" placeholder="Starting password" style="flex:1;" />
+        <button type="button" class="icon-btn new-user-create-btn">Create</button>
+        <button type="button" class="icon-btn new-user-cancel-btn">Cancel</button>
+      </div>`;
+    container.prepend(row);
+    row.querySelector('.new-user-cancel-btn').addEventListener('click', () => row.remove());
+    row.querySelector('.new-user-create-btn').addEventListener('click', async () => {
+      const errEl = document.getElementById('users-err');
+      const okEl = document.getElementById('users-ok');
+      errEl.textContent = '';
+      okEl.textContent = '';
+      const username = row.querySelector('.new-user-username').value.trim();
+      const password = row.querySelector('.new-user-password').value;
+      const role = row.querySelector('.new-user-role').value;
+      if (!username || !password) { errEl.textContent = 'Username and password are required.'; return; }
+      const btn = row.querySelector('.new-user-create-btn');
+      btn.disabled = true;
+      const result = await window.statusApp.createUser(username, password, role).catch((err) => ({ ok: false, error: err.message }));
+      btn.disabled = false;
+      if (!result || !result.ok) {
+        errEl.textContent = (result && result.error) || 'Could not create account.';
+        return;
+      }
+      okEl.textContent = `Account "${username}" created.`;
+      await refreshUsersList();
+    });
+    row.querySelector('.new-user-username').focus();
+  });
+
+  initUsersSection();
   init();
 </script>
 </body>

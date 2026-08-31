@@ -25,31 +25,27 @@ function normalizeKey(s) {
 // Buckets the live list of sheet tabs into whatever categories the
 // connected sheet's _Categories tab defines, in that tab's own row order,
 // skipping a category entirely if none of its tabs currently exist (e.g. a
-// tab got renamed). Anything left over — present on the sheet but not
-// listed under any category — lands in a "More" bucket appended at the
-// end, so a brand-new tab is discoverable instead of just vanishing.
+// tab got renamed). A tab present on the sheet but not listed under any
+// category simply doesn't appear here at all — no catch-all "More" bucket
+// — so it stays off the landing screen until it's deliberately added to a
+// category in _Categories (or the app's "Manage Fields & Options" ->
+// Landing-Screen Categories).
 //
 // If liveCategories is empty (nothing configured at all — the default for
-// a brand-new organization), returns [] on purpose: that's the signal
-// index.html uses to skip the category-picker screen entirely and show a
-// flat tab list instead, exactly like the app behaved before categories
-// existed. A "More" bucket only ever appears alongside *some* real
-// configured category, never as the sole group.
+// a brand-new organization), returns [] too, but for a different reason:
+// that's the signal index.html uses to skip the category-picker screen
+// entirely and show a flat tab list instead, exactly like the app behaved
+// before categories existed. The two cases look the same to the caller
+// (an empty array) and are meant to — "no categories configured yet" and
+// "every tab already sorted into one" both just mean nothing extra to
+// show here.
 function groupTabsIntoCategories(tabs, liveCategories) {
   const categoryNames = Object.keys(liveCategories || {});
   if (categoryNames.length === 0) return [];
 
-  const used = new Set();
-  const groups = categoryNames
-    .map((name) => {
-      const members = liveCategories[name].filter((t) => tabs.indexOf(t) !== -1);
-      members.forEach((t) => used.add(t));
-      return { name: name, tabs: members };
-    })
+  return categoryNames
+    .map((name) => ({ name, tabs: liveCategories[name].filter((t) => tabs.indexOf(t) !== -1) }))
     .filter((g) => g.tabs.length > 0);
-  const leftover = tabs.filter((t) => !used.has(t));
-  if (leftover.length) groups.push({ name: 'More', tabs: leftover });
-  return groups;
 }
 
 // Matches column names case-insensitively (and ignoring stray whitespace),

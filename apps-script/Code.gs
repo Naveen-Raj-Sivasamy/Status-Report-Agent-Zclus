@@ -1190,7 +1190,7 @@ function writeCategoriesMap(map) {
 // stays in sync with whatever this function actually knows how to
 // document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
-var FEATURES_GUIDE_VERSION = '5';
+var FEATURES_GUIDE_VERSION = '6';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1236,7 +1236,7 @@ function ensureFeaturesTab() {
     [
       'Add a new landing-screen category',
       '1. Open _Categories.\n2. Add rows: Category = new or existing name, Tab = the sheet tab to put under it.',
-      'A tab left out of _Categories still shows, just ungrouped ("More" if other categories exist, or a flat list if none do).',
+      'A tab left out of _Categories entirely just won\'t show up on the landing screen until you add it to one — no catch-all bucket for it.',
     ],
     [
       'Add a brand-new tab (a whole new kind of entry)',

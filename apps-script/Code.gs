@@ -54,11 +54,11 @@
  *
  * A "Weekly_Connect" tab is created automatically (see
  * ensureWeeklyConnectTab()) the same way Leave is — tracks questions/
- * issues raised through the week, posts a running list to Teams (if
- * TEAMS_WEBHOOK_URL is set) scoped to the current Wed-to-Wed window, and
- * supports editing a ticket's Status/Comments in place from the widget's
- * "View & Update Tickets" screen — the one place in this app that edits
- * an existing row instead of appending.
+ * issues raised through the week, posts a running list to Teams (if a
+ * webhook URL is set — see getTeamsWebhookUrl()) scoped to the current
+ * Wed-to-Wed window, and supports editing a ticket's Status/Comments in
+ * place from the widget's "View & Update Tickets" screen — the one place
+ * in this app that edits an existing row instead of appending.
  *
  * REQUIRED ONE-TIME SETUP: SHARED_SECRET and the recipient lists are NOT
  * hardcoded in this file (this repo is public — a committed secret/PII
@@ -104,11 +104,18 @@ var SHARED_SECRET = getScriptProp_('SHARED_SECRET');
 // for the Friday reminder, and for Weekly Connect's running ticket post
 // (see postWeeklyConnectToTeams()). Leave unset to skip Teams entirely.
 // (Team > channel > Connectors > Incoming Webhook — no admin/IT app
-// registration needed for this, most tenants allow it.) A webhook URL is
-// itself a write capability (anyone with it can post to your channel), so
-// this lives in Script Properties like SHARED_SECRET, not hardcoded here —
-// set it via setupScriptProperties() or Project Settings > Script
-// Properties directly.
+// registration needed for this, most tenants allow it.)
+//
+// Editable from _Config's TeamsWebhookUrl row, or the in-app "Manage
+// Fields & Options" -> Report Settings screen — see getTeamsWebhookUrl()
+// near ensureConfigTab(), same tiered pattern as ReportRecipients: _Config
+// wins if set, else this Script Property is the fallback (kept working
+// for a deployment that set it up before _Config supported this). Unlike
+// SHARED_SECRET — which genuinely can't live in a sheet cell without
+// defeating its own purpose — a Teams webhook only grants posting into
+// one specific channel, so making it Sheet/App-configurable is a
+// reasonable trade for "any client using this app can set/change it
+// themselves, no code touched."
 var TEAMS_WEBHOOK_URL = getScriptProp_('TEAMS_WEBHOOK_URL');
 
 // Column name (must match a header in every tab) auto-filled with the
@@ -360,6 +367,7 @@ function doPost(e) {
           hiddenTabs: getHiddenTabs(),
           reportRecipients: getConfigList_('ReportRecipients'),
           reminderRecipients: getConfigList_('ReminderRecipients'),
+          teamsWebhookUrl: getConfigValue('TeamsWebhookUrl'),
         },
       });
     }
@@ -380,6 +388,7 @@ function doPost(e) {
         setConfigValue('HiddenTabs', (settings.hiddenTabs || []).join(', '));
         setConfigValue('ReportRecipients', (settings.reportRecipients || []).join(', '));
         setConfigValue('ReminderRecipients', (settings.reminderRecipients || []).join(', '));
+        setConfigValue('TeamsWebhookUrl', (settings.teamsWebhookUrl || '').trim());
       } finally {
         reportLock.releaseLock();
       }
@@ -635,8 +644,9 @@ function sendFridayReminder() {
     MailApp.sendEmail(addr, subject, body);
   });
 
-  if (TEAMS_WEBHOOK_URL) {
-    UrlFetchApp.fetch(TEAMS_WEBHOOK_URL, {
+  var teamsWebhookUrl = getTeamsWebhookUrl();
+  if (teamsWebhookUrl) {
+    UrlFetchApp.fetch(teamsWebhookUrl, {
       method: 'post',
       contentType: 'application/json',
       payload: JSON.stringify({ text: '⏰ ' + subject + ' — ' + ss.getUrl() }),
@@ -1069,13 +1079,15 @@ function getCurrentConnectWeekRange() {
 
 /** Posts (as a fresh message — see the comment on TEAMS_WEBHOOK_URL/the
  * Weekly Connect plan for why this isn't a truly edited single message)
- * every ticket raised in the current connect week. Silently no-ops if
- * TEAMS_WEBHOOK_URL isn't set — Weekly Connect works fine without Teams,
- * same as the Friday reminder does. Never throws: a Teams outage should
- * never take down the actual save, which is why doPost calls this AFTER
- * appendRow already succeeded, in its own try/catch. */
+ * every ticket raised in the current connect week. Silently no-ops if no
+ * Teams webhook is configured (getTeamsWebhookUrl()) — Weekly Connect
+ * works fine without Teams, same as the Friday reminder does. Never
+ * throws: a Teams outage should never take down the actual save, which is
+ * why doPost calls this AFTER appendRow already succeeded, in its own
+ * try/catch. */
 function postWeeklyConnectToTeams() {
-  if (!TEAMS_WEBHOOK_URL) return;
+  var teamsWebhookUrl = getTeamsWebhookUrl();
+  if (!teamsWebhookUrl) return;
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(WEEKLY_CONNECT_TAB_NAME);
   if (!sheet) return;
 
@@ -1098,11 +1110,11 @@ function postWeeklyConnectToTeams() {
     var who = t['Requester'] ? ' — ' + t['Requester'] : '';
     return '**Q' + t['Ticket ID'] + '**: ' + (t['Issue'] || '(no description)') + who;
   });
-  var text = '**CMS Weekly Connect — week of ' + weekLabel + '**\n\n' +
+  var text = '**Weekly Connect — week of ' + weekLabel + '**\n\n' +
     (lines.length ? lines.join('\n\n') : '_Nothing logged yet this week._');
 
   try {
-    UrlFetchApp.fetch(TEAMS_WEBHOOK_URL, {
+    UrlFetchApp.fetch(teamsWebhookUrl, {
       method: 'post',
       contentType: 'application/json',
       payload: JSON.stringify({ text: text }),
@@ -1449,7 +1461,7 @@ function writeCategoriesMap(map) {
 // stays in sync with whatever this function actually knows how to
 // document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
-var FEATURES_GUIDE_VERSION = '7';
+var FEATURES_GUIDE_VERSION = '8';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1525,7 +1537,12 @@ function ensureFeaturesTab() {
     [
       'Weekly Connect: log a ticket / update one',
       '1. Widget -> Weekly Connect category -> Weekly_Connect -> fill the form to log a new one.\n2. From that same screen, "View & update tickets" -> pick one -> set Status/Comments -> Save.',
-      "New tickets auto-post to Teams (if TEAMS_WEBHOOK_URL is set — see Script Properties) as a running list scoped to the current Wed-to-Wed week. Status/Comments are the one thing in this whole app that edits an existing row instead of appending.",
+      "New tickets auto-post to Teams (once a webhook URL is set — see the row below) as a running list scoped to the current Wed-to-Wed week. Status/Comments are the one thing in this whole app that edits an existing row instead of appending.",
+    ],
+    [
+      'Set (or change) the Teams webhook URL',
+      '1. Open _Config.\n2. Edit the TeamsWebhookUrl row.',
+      'Or use the app\'s "Manage Fields & Options" -> Report Settings. Leave blank to turn Teams posting off entirely — nothing else about Weekly Connect or the Friday reminder depends on it.',
     ],
     [
       "What's still a code change (not sheet- or app-editable)",
@@ -1604,6 +1621,7 @@ function writeSheetVsAppTable_(sheet) {
     ['Choose which tabs feed the Friday report', 'Yes', 'Yes'],
     ['Hide a tab from the app', 'Yes', 'Yes'],
     ['Change who gets report/reminder emails', 'Yes', 'Yes'],
+    ['Set/change the Teams webhook URL', 'Yes', 'Yes'],
     ['Create a brand-new tab', 'Yes', 'No'],
     ['Rename or delete an existing tab', 'Yes', 'No'],
     ['Change the connection token / admin password', 'No', 'Yes'],
@@ -1723,6 +1741,7 @@ function ensureConfigDefaults_(sheet) {
     ['HiddenTabs', migratedTabList_(['Weekly_Monthly_Summary'])],
     ['ReportRecipients', ''],
     ['ReminderRecipients', ''],
+    ['TeamsWebhookUrl', ''],
   ];
   var data = sheet.getDataRange().getValues();
   var existingKeys = data.slice(1).map(function (r) { return String(r[0]).trim(); });
@@ -1795,6 +1814,15 @@ function getReminderRecipients() {
   var override = getScriptPropList_('REMINDER_RECIPIENTS');
   if (override.length) return override;
   return getReportRecipients();
+}
+
+/** _Config's TeamsWebhookUrl if set, else the TEAMS_WEBHOOK_URL Script
+ * Property (the original mechanism, kept working for any deployment that
+ * already relies on it). Empty string if neither is set — every caller
+ * treats that as "Teams is off", never an error. */
+function getTeamsWebhookUrl() {
+  var fromSheet = getConfigValue('TeamsWebhookUrl');
+  return fromSheet || TEAMS_WEBHOOK_URL;
 }
 
 function jsonOut(obj) {

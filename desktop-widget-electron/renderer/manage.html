@@ -172,6 +172,10 @@
       <div id="reminder-recipients-rows"></div>
       <button class="icon-btn" type="button" id="add-reminder-recipient-btn">+ Add email</button>
 
+      <div class="field-label" style="margin-top:14px;">Teams webhook URL</div>
+      <p class="hint" style="margin: -2px 0 6px;">Used for the Friday reminder and Weekly Connect's running ticket post. Leave blank to turn Teams posting off entirely.</p>
+      <input id="teams-webhook-url" type="text" placeholder="https://..." style="width:100%;" />
+
       <div class="row-actions">
         <button id="save-report-settings-btn">Save Report Settings</button>
       </div>
@@ -190,7 +194,7 @@
   let fieldSchemaMap = {};
   let categoriesMap = {};
   let allTabs = []; // every real tab, including currently-hidden ones — Report Settings only
-  let reportSettings = { reportTabs: [], hiddenTabs: [], reportRecipients: [], reminderRecipients: [] };
+  let reportSettings = { reportTabs: [], hiddenTabs: [], reportRecipients: [], reminderRecipients: [], teamsWebhookUrl: '' };
 
   // Mirrors _FieldSchema's actual supported Type values exactly — see
   // buildFieldInput() in index.html and the _Features guide tab. '' means
@@ -279,6 +283,7 @@
     ['Choose which tabs feed the Friday report', 'yes', 'yes'],
     ['Hide a tab from the app', 'yes', 'yes'],
     ['Change who gets report/reminder emails', 'yes', 'yes'],
+    ['Set/change the Teams webhook URL', 'yes', 'yes'],
     ['Create a brand-new tab', 'yes', 'no'],
     ['Rename or delete an existing tab', 'yes', 'no'],
     ['Change the connection token / admin password', 'no', 'yes'],
@@ -573,6 +578,8 @@
     reminderRecipientsContainer.innerHTML = '';
     (reportSettings.reportRecipients || []).forEach((e) => reportRecipientsContainer.appendChild(buildEmailRow(e)));
     (reportSettings.reminderRecipients || []).forEach((e) => reminderRecipientsContainer.appendChild(buildEmailRow(e)));
+
+    document.getElementById('teams-webhook-url').value = reportSettings.teamsWebhookUrl || '';
   }
 
   document.getElementById('add-report-recipient-btn').addEventListener('click', () => {
@@ -588,6 +595,7 @@
       hiddenTabs: Array.from(document.querySelectorAll('#hidden-tabs-checks input:checked')).map((c) => c.value),
       reportRecipients: Array.from(document.querySelectorAll('#report-recipients-rows input')).map((i) => i.value.trim()).filter(Boolean),
       reminderRecipients: Array.from(document.querySelectorAll('#reminder-recipients-rows input')).map((i) => i.value.trim()).filter(Boolean),
+      teamsWebhookUrl: document.getElementById('teams-webhook-url').value.trim(),
     };
     await saveSection('save-report-settings-btn', 'report-settings-err', 'report-settings-ok', () => window.statusApp.saveReportSettings(settings));
     reportSettings = settings;

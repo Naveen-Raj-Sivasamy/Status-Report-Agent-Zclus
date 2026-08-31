@@ -51,9 +51,21 @@ jobs:
           - os: windows-latest
             build-script: build:win
             artifact: StatusUpdate-Setup.exe
+            # latest.yml + the .exe's .blockmap are electron-updater's own
+            # update-feed metadata (see package.json's "publish" config —
+            # --publish never still generates these locally, just doesn't
+            # try to upload them itself). Windows-only: Mac auto-update
+            # needs a code-signed, notarized app to work reliably, which
+            # this unsigned build isn't (see the Gatekeeper note below) —
+            # main.js never checks for updates on Mac, so there's nothing
+            # that would ever read a Mac equivalent of these.
+            extra-files: |
+              desktop-widget-electron/dist/latest.yml
+              desktop-widget-electron/dist/*.blockmap
           - os: macos-latest
             build-script: build:mac
             artifact: StatusUpdate-Setup.dmg
+            extra-files: ''
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -85,7 +97,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: desktop-widget-electron/dist/${{ matrix.artifact }}
+          files: |
+            desktop-widget-electron/dist/${{ matrix.artifact }}
+            ${{ matrix.extra-files }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
 

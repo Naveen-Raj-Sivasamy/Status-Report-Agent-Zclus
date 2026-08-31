@@ -2,6 +2,7 @@ const { app, Tray, Menu, BrowserWindow, ipcMain, screen, nativeImage, shell, dia
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { autoUpdater } = require('electron-updater');
 const APP_VERSION = require('./package.json').version;
 
 // Dev convenience: a full config.json next to main.js (gitignored) overrides
@@ -452,6 +453,49 @@ ipcMain.handle('check-latest-version', async () => {
     return null; // still never block the app on a version check
   }
 });
+// -------------------- auto-update (Windows only) --------------------
+// electron-updater downloads a new release in the background the moment
+// one's detected, then applies it on quitAndInstall() — one click, no
+// browser, no manually running a downloaded installer, the same
+// mechanism Chrome/Slack/VSCode use. Mac deliberately stays on the
+// existing manual-download flow (the "Update available" banner opening
+// DownloadUrl in the browser): its underlying auto-update mechanism
+// (Squirrel.Mac) needs a code-signed, notarized app to work reliably,
+// and this build is unsigned — no paid Apple Developer account, same
+// reason Gatekeeper already flags it on first install (see
+// build-release.yml). checkLatestVersion/_Config.LatestVersion (above)
+// still drives the visible "Update available" banner on both platforms
+// either way — this only changes what clicking it does on Windows once
+// a download has actually finished.
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+let updateReadyToInstall = false;
+
+autoUpdater.on('update-downloaded', () => {
+  updateReadyToInstall = true;
+  if (popup && !popup.isDestroyed()) {
+    popup.webContents.send('update-downloaded');
+  }
+});
+autoUpdater.on('error', (err) => {
+  // Best-effort — the existing manual-download banner/link is still there
+  // as a fallback regardless of why the background check/download failed.
+  console.error('autoUpdater error:', err);
+});
+
+function checkForUpdatesInBackground() {
+  if (process.platform !== 'win32') return;
+  autoUpdater.checkForUpdates().catch(() => {
+    /* best-effort — never block/interrupt the app over this */
+  });
+}
+
+ipcMain.handle('is-update-ready-to-install', () => updateReadyToInstall);
+ipcMain.handle('quit-and-install', () => {
+  if (updateReadyToInstall) autoUpdater.quitAndInstall();
+});
+
 ipcMain.handle('open-external', (_e, url) => {
   if (url) shell.openExternal(url);
 });
@@ -904,6 +948,9 @@ function startMainApp() {
 
   popup = createPopup();
   floatBtn = createFloatButton();
+
+  checkForUpdatesInBackground(); // once at launch...
+  setInterval(checkForUpdatesInBackground, 4 * 60 * 60 * 1000); // ...and every 4 hours after, for anyone who leaves the app running for days
 }
 
 app.whenReady().then(() => {

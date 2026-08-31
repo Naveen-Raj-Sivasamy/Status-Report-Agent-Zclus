@@ -1,13 +1,13 @@
 {
   "name": "status-update-widget",
-  "version": "1.17.2",
+  "version": "1.18.0",
   "description": "Floating tray widget for the Status Report Tracker Agent",
   "main": "main.js",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac"
+    "build:win": "electron-builder --win --publish never",
+    "build:mac": "electron-builder --mac --publish never"
   },
   "build": {
     "appId": "org.fairview.statusupdate",
@@ -44,7 +44,17 @@
     },
     "dmg": {
       "artifactName": "StatusUpdate-Setup.dmg"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Naveen-Raj-Sivasamy",
+        "repo": "Status-Report-Agent-Zclus"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.0"
   },
   "devDependencies": {
     "electron": "^31.0.0",

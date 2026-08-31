@@ -226,12 +226,17 @@ Windows installer AND the Mac disk image, on their respective native
 runners (`windows-latest` / `macos-latest`, one after the other, not in
 parallel — both upload to the same release), and publishes them as
 GitHub Release assets named `StatusUpdate-Setup.exe` and
-`StatusUpdate-Setup.dmg`. It also calls the Apps Script web app's
-`setLatestVersion` action once (not once per platform) so the `_Config`
-tab's `LatestVersion` updates itself. Neither release asset's filename
-changes between releases, so these links always point at the newest
-build of each and the `.exe` one is what's stored as `DownloadUrl` (set
-once, permanently):
+`StatusUpdate-Setup.dmg`. For the Windows leg it also uploads
+`latest.yml` and the installer's `.blockmap` — `electron-updater`'s own
+update-feed metadata, generated locally by `electron-builder` even though
+the build script passes `--publish never` (it just skips electron-builder's
+own upload; this workflow uploads them instead, alongside the installer).
+It also calls the Apps Script web app's `setLatestVersion` action once
+(not once per platform) so the `_Config` tab's `LatestVersion` updates
+itself — that value now only matters for Mac's manual-update banner (see
+below). Neither release asset's filename changes between releases, so
+these links always point at the newest build of each and the `.exe` one
+is what's stored as `DownloadUrl` (set once, permanently):
 
 ```
 https://github.com/<owner>/<repo>/releases/latest/download/StatusUpdate-Setup.exe
@@ -268,8 +273,30 @@ the same right-click-to-open workaround described above.
 - **App/UI change** (needs a new installer): bump `"version"` in
   `desktop-widget-electron/package.json` and push to `main`. That's it —
   the tag, the build, the GitHub Release, and the `LatestVersion` bump all
-  happen automatically from there. Everyone still on an older version sees
-  the in-app update banner within a few minutes.
+  happen automatically from there.
+
+**How teammates actually receive that update** differs by platform:
+
+- **Windows** (the primary platform): fully silent, via `electron-updater`.
+  The app checks GitHub for a newer release at launch and every 4 hours in
+  the background; if one exists it downloads it silently, no click needed.
+  Once the download finishes, the popup's update link changes to
+  **"Restart to update"** — one click quits the app, installs, and relaunches
+  it. Nothing is ever forced on a teammate mid-task: it only installs when
+  they click that link (or the next time they quit the app normally, since
+  `autoInstallOnAppQuit` is on).
+- **Mac**: still the old manual flow. Auto-update needs a code-signed,
+  notarized build (Squirrel.Mac's requirement), which this project doesn't
+  have — see the unsigned-build note above. `main.js` never runs the
+  background check on Mac; instead the popup keeps comparing its own
+  version against `_Config`'s `LatestVersion` (the same field the workflow
+  above updates) and shows an **"Update available"** link that opens the
+  `.dmg` download page for a manual re-install.
+
+  Note this only applies going forward: a teammate on a version that
+  predates this auto-update mechanism still needs one last manual
+  `.exe` download to get onto an auto-updating build — after that,
+  Windows updates become silent.
 
 ## 5. Adjust the schedule
 

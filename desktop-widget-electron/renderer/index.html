@@ -1361,10 +1361,29 @@
     return false;
   }
 
+  // On Windows, electron-updater may already have a new version fully
+  // downloaded in the background by the time this popup opens (it checks
+  // at launch and every few hours, independent of whether the popup is
+  // even open) — in that case, skip straight to "Restart to update"
+  // instead of the browser-download link, since there's nothing left to
+  // download. Mac has no such state (no auto-update there — see the
+  // comment in main.js), so isUpdateReadyToInstall() is always false.
+  function showUpdateReadyToInstall(version) {
+    els.updateLink.textContent = 'Restart to update';
+    els.updateLink.title = version ? `Update ready — v${version}` : 'Update downloaded — click to restart and install';
+    els.updateLink.onclick = () => window.statusApp.quitAndInstall();
+    els.updateLink.classList.add('visible');
+  }
+
   async function checkAppVersion() {
     try {
       const version = await window.statusApp.getAppVersion();
       els.versionBadge.textContent = `v${version}`;
+
+      if (await window.statusApp.isUpdateReadyToInstall()) {
+        showUpdateReadyToInstall();
+        return;
+      }
 
       const latest = await window.statusApp.checkLatestVersion();
       if (latest && latest.ok && latest.latest && isNewerVersion(latest.latest, version)) {
@@ -1379,6 +1398,12 @@
       /* best-effort — never block the app over a version check */
     }
   }
+
+  // Fires whenever a background download finishes WHILE this popup is
+  // open (the Windows-only autoUpdater check on a timer in main.js isn't
+  // tied to the popup being open at all) — flips the banner over live,
+  // same end state as checkAppVersion() finding it already downloaded.
+  window.statusApp.onUpdateDownloaded(() => showUpdateReadyToInstall());
 
   // Fire-and-forget, same as getYourName below — main.js already caches
   // this in memory (stale-while-revalidate), so calling it again on every

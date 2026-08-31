@@ -1574,7 +1574,7 @@ function writeCategoriesMap(map) {
 // stays in sync with whatever this function actually knows how to
 // document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
-var FEATURES_GUIDE_VERSION = '10';
+var FEATURES_GUIDE_VERSION = '11';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1700,7 +1700,7 @@ function ensureFeaturesTab() {
     ],
     [
       'richtext',
-      'A text box with a small Bold / Bullets / Numbered / Link toolbar above it.',
+      'A text box with a small Bold / Bullets / Numbered / Link toolbar above it, plus a live rendered preview underneath as you type — and shows fully formatted (not raw **/- syntax) wherever it\'s displayed read-only, e.g. Weekly Connect\'s ticket detail screen.',
       'Stores lightweight Markdown (**bold**, - item, 1. item, [text](url)), not HTML — reads fine as plain text directly in the sheet cell too. No OptionsKey needed.',
     ],
     [

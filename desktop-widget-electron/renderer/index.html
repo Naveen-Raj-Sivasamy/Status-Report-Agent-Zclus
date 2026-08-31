@@ -306,6 +306,16 @@
     min-height: 70px; box-shadow: none;
   }
   .richtext-wrap textarea:focus { outline: none; }
+  .richtext-preview {
+    margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);
+    font-size: 12.5px; color: var(--text); line-height: 1.45; word-break: break-word;
+  }
+  .richtext-preview-empty { color: var(--text-dim); font-style: italic; }
+  .richtext-preview strong { font-weight: 800; }
+  .richtext-preview a { color: var(--brand); text-decoration: underline; }
+  .richtext-preview ul, .richtext-preview ol { margin: 4px 0; padding-left: 18px; }
+  .richtext-preview li { margin-bottom: 2px; }
+  .richtext-preview br:last-child { display: none; } /* trailing <br> from the last line — avoids a dangling blank line at the bottom */
 
   .hidden { display: none !important; }
 </style>
@@ -467,6 +477,57 @@
     const d = document.createElement('div');
     d.textContent = String(s);
     return d.innerHTML;
+  }
+
+  // Minimal, safe renderer for exactly the 4 things the richtext toolbar
+  // produces — not a general Markdown library (no dependency needed for
+  // just **bold**, - bullets, N. numbered, [text](url)). Escapes FIRST,
+  // then substitutes the real <strong>/<ul>/<a> tags on the already-safe
+  // text — a user typing a literal "<" can never become a real tag this
+  // way, and link hrefs are restricted to http(s)/mailto so this can't
+  // become a javascript: URI. Safe to feed into innerHTML.
+  function renderMarkdownLite(text) {
+    if (!text) return '';
+    let html = escapeHtml(text)
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+    let out = '';
+    let listType = null; // 'ul' | 'ol' | null — tracks an open <ul>/<ol> across consecutive list lines
+    const closeList = () => {
+      if (listType) { out += listType === 'ul' ? '</ul>' : '</ol>'; listType = null; }
+    };
+    html.split('\n').forEach((line) => {
+      const bullet = line.match(/^- (.*)$/);
+      const numbered = line.match(/^\d+\. (.*)$/);
+      if (bullet) {
+        if (listType !== 'ul') { closeList(); out += '<ul>'; listType = 'ul'; }
+        out += '<li>' + bullet[1] + '</li>';
+      } else if (numbered) {
+        if (listType !== 'ol') { closeList(); out += '<ol>'; listType = 'ol'; }
+        out += '<li>' + numbered[1] + '</li>';
+      } else {
+        closeList();
+        out += line + '<br>';
+      }
+    });
+    closeList();
+    return out;
+  }
+
+  // Plain-text approximation for the one place rendered HTML doesn't fit —
+  // the ticket list's single-line, ellipsis-truncated preview (a <ul>
+  // wants to expand vertically, which breaks that truncation). Just drops
+  // the syntax markers instead of rendering them.
+  function stripMarkdown(text) {
+    if (!text) return '';
+    return String(text)
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/^[-*]\s+/gm, '')
+      .replace(/^\d+\.\s+/gm, '')
+      .replace(/\n+/g, ' ');
   }
 
   function launchConfetti(container) {
@@ -941,8 +1002,19 @@
         textarea.setRangeText('[' + label + '](' + url + ')', start, end, 'end');
       }));
 
+      const preview = document.createElement('div');
+      preview.className = 'richtext-preview';
+      const syncPreview = () => {
+        preview.innerHTML = textarea.value.trim()
+          ? renderMarkdownLite(textarea.value)
+          : '<span class="richtext-preview-empty">Preview appears here as you type…</span>';
+      };
+      textarea.addEventListener('input', syncPreview);
+      syncPreview();
+
       wrap.appendChild(toolbar);
       wrap.appendChild(textarea);
+      wrap.appendChild(preview);
       // Give the wrapper a value-like interface so submit/draft-save
       // collection works uniformly — same trick the multiselect chip-group
       // above uses, since this isn't a real form control itself.
@@ -1164,7 +1236,7 @@
             ${t.Status ? `<span class="badge ${statusClass}">${escapeHtml(t.Status)}</span>` : ''}
           </div>
         </div>
-        <div class="wc-ticket-issue">${escapeHtml(t.Issue || '(no description)')}</div>
+        <div class="wc-ticket-issue">${escapeHtml(stripMarkdown(t.Issue) || '(no description)')}</div>
         <div class="wc-ticket-meta">${t.Group ? escapeHtml(t.Group) + ' · ' : ''}${escapeHtml(t.Requester || 'Unknown')} · ${escapeHtml(t.Date || '')}</div>
       `;
       btn.onclick = () => showWeeklyConnectEdit(t);
@@ -1184,8 +1256,14 @@
     els.sub.textContent = `Ticket Q${ticket['Ticket ID']}`;
     els.main.style.minHeight = '';
     els.footer.classList.add('hidden');
+    // renderMarkdownLite, not escapeHtml — Issue may be a richtext field
+    // (see _FieldSchema), so this shows it actually bold/bulleted/linked
+    // rather than the raw **/- /[]() syntax. Safe either way: a plain
+    // (non-richtext) Issue has none of that syntax to begin with, and
+    // renderMarkdownLite escapes real HTML before ever substituting its
+    // own tags in.
     els.main.innerHTML = `
-      <div class="wc-detail-issue">${escapeHtml(ticket.Issue || '(no description)')}</div>
+      <div class="wc-detail-issue">${renderMarkdownLite(ticket.Issue || '(no description)')}</div>
       <div class="wc-detail-meta">
         ${ticket.Group ? escapeHtml(ticket.Group) + ' · ' : ''}${escapeHtml(ticket.Requester || 'Unknown')} · ${escapeHtml(ticket.Date || '')}${ticket.URL ? ' · <a href="#" id="wc-url-link">Reference link</a>' : ''}
       </div>
@@ -1210,9 +1288,11 @@
     commentsWrap.className = 'field';
     const commentsLabel = document.createElement('label');
     commentsLabel.textContent = 'Comments';
-    const commentsInput = document.createElement('textarea');
-    commentsInput.rows = 3;
-    commentsInput.value = ticket.Comments || '';
+    // buildFieldInput, not a hand-built textarea — picks up the richtext
+    // toolbar+preview automatically if Comments' Type is set to richtext
+    // (see _FieldSchema), same as the entry form; falls back to a plain
+    // textarea otherwise, exactly like before.
+    const commentsInput = buildFieldInput(WEEKLY_CONNECT_TAB, 'Comments', ticket.Comments);
     commentsWrap.appendChild(commentsLabel);
     commentsWrap.appendChild(commentsInput);
     els.main.appendChild(commentsWrap);

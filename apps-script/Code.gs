@@ -1574,7 +1574,7 @@ function writeCategoriesMap(map) {
 // stays in sync with whatever this function actually knows how to
 // document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
-var FEATURES_GUIDE_VERSION = '9';
+var FEATURES_GUIDE_VERSION = '10';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1697,6 +1697,11 @@ function ensureFeaturesTab() {
       'sequence',
       'Read-only text, auto-numbered: highest existing value in that column on the sheet, plus one.',
       'No OptionsKey needed.',
+    ],
+    [
+      'richtext',
+      'A text box with a small Bold / Bullets / Numbered / Link toolbar above it.',
+      'Stores lightweight Markdown (**bold**, - item, 1. item, [text](url)), not HTML — reads fine as plain text directly in the sheet cell too. No OptionsKey needed.',
     ],
     [
       '(blank / no row at all)',

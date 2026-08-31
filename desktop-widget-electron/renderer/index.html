@@ -287,6 +287,26 @@
   .wc-detail-meta { color: var(--on-brand-dim); font-size: 11.5px; margin-bottom: 14px; }
   .wc-detail-meta a { color: inherit; }
 
+  /* richtext field — a formatting toolbar over a plain textarea (stores
+     Markdown, not HTML — see the comment in buildFieldInput()). Overrides
+     the generic .field textarea rule above (same specificity, wins on
+     source order) so the textarea blends into this wrapper instead of
+     getting its own separate surface/shadow. */
+  .richtext-wrap { background: var(--surface); border-radius: 9px; padding: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+  .richtext-toolbar { display: flex; gap: 4px; margin-bottom: 5px; }
+  .richtext-btn {
+    background: #f0e8ea; border: none; border-radius: 6px; padding: 4px 9px;
+    font-size: 12px; font-weight: 700; color: var(--text); cursor: pointer;
+    font-family: inherit;
+  }
+  .richtext-btn:hover { background: #e3d5d9; }
+  .richtext-wrap textarea {
+    width: 100%; background: transparent; border: none; color: var(--text);
+    padding: 4px; font-size: 13px; font-family: inherit; resize: vertical;
+    min-height: 70px; box-shadow: none;
+  }
+  .richtext-wrap textarea:focus { outline: none; }
+
   .hidden { display: none !important; }
 </style>
 </head>
@@ -856,6 +876,80 @@
         get: () => Array.from(selected).join(', '),
       });
       return group;
+    }
+
+    if (spec && spec.type === 'richtext') {
+      // Stores lightweight Markdown (**bold**, - bullets, 1. numbered,
+      // [text](url)), not HTML — HTML would render as literal angle-
+      // bracket noise when read directly in the Sheet cell (the whole
+      // point of this app), and risks injection wherever the value gets
+      // shown elsewhere (Teams, a future report). Markdown stays readable
+      // as plain text even unrendered.
+      const wrap = document.createElement('div');
+      wrap.className = 'richtext-wrap';
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'richtext-toolbar';
+
+      const textarea = document.createElement('textarea');
+      textarea.rows = 4;
+      if (presetValue) textarea.value = presetValue;
+
+      const wrapSelection = (before, after) => {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const selected = textarea.value.slice(start, end);
+        textarea.focus();
+        textarea.setRangeText(before + selected + after, start, end, 'end');
+      };
+      const prefixLines = (makeLine) => {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const value = textarea.value;
+        const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+        const nextBreak = value.indexOf('\n', end);
+        const lineEnd = nextBreak === -1 ? value.length : nextBreak;
+        const block = value.slice(lineStart, lineEnd);
+        const newBlock = block.split('\n').map(makeLine).join('\n');
+        textarea.focus();
+        textarea.setRangeText(newBlock, lineStart, lineEnd, 'end');
+      };
+
+      const makeToolbarBtn = (label, title, onClick) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'richtext-btn';
+        btn.textContent = label;
+        btn.title = title;
+        btn.onclick = (e) => { e.preventDefault(); onClick(); };
+        return btn;
+      };
+      toolbar.appendChild(makeToolbarBtn('B', 'Bold', () => wrapSelection('**', '**')));
+      toolbar.appendChild(makeToolbarBtn('•', 'Bullet list', () =>
+        prefixLines((line) => (line.startsWith('- ') ? line : '- ' + line))
+      ));
+      toolbar.appendChild(makeToolbarBtn('1.', 'Numbered list', () =>
+        prefixLines((line, i) => (i + 1) + '. ' + line.replace(/^\d+\.\s*/, ''))
+      ));
+      toolbar.appendChild(makeToolbarBtn('🔗', 'Insert link', () => {
+        const url = window.prompt('Link URL:');
+        if (!url) return;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const label = textarea.value.slice(start, end) || 'link';
+        textarea.focus();
+        textarea.setRangeText('[' + label + '](' + url + ')', start, end, 'end');
+      }));
+
+      wrap.appendChild(toolbar);
+      wrap.appendChild(textarea);
+      // Give the wrapper a value-like interface so submit/draft-save
+      // collection works uniformly — same trick the multiselect chip-group
+      // above uses, since this isn't a real form control itself.
+      Object.defineProperty(wrap, 'value', {
+        get: () => textarea.value,
+      });
+      return wrap;
     }
 
     if (spec && spec.type === 'date') {

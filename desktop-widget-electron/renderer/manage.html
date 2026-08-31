@@ -212,7 +212,7 @@
   // Mirrors _FieldSchema's actual supported Type values exactly — see
   // buildFieldInput() in index.html and the _Features guide tab. '' means
   // "no row at all", i.e. plain text — never written back as a real row.
-  const FIELD_TYPES = ['', 'select', 'multiselect', 'checkbox', 'date', 'week-auto', 'sequence'];
+  const FIELD_TYPES = ['', 'select', 'multiselect', 'checkbox', 'date', 'week-auto', 'sequence', 'richtext'];
 
   async function init() {
     const hasConfig = await window.statusApp.hasConnectionConfig();

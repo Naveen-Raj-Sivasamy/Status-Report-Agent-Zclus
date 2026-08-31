@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('statusApp', {
   onSubmitRetry: (callback) => ipcRenderer.on('submit-retry', (_e, info) => callback(info)),
   resizeWindow: (height) => ipcRenderer.send('resize-window', height),
   moveFloatBtnBy: (dx, dy) => ipcRenderer.send('float-btn-move-by', { dx, dy }),
+  setIgnoreMouseEvents: (ignore) => ipcRenderer.send('float-btn-set-ignore-mouse', ignore),
   clearCache: () => ipcRenderer.invoke('clear-cache'),
   hasConnectionConfig: () => ipcRenderer.invoke('has-connection-config'),
   verifyAdminPassword: (password) => ipcRenderer.invoke('verify-admin-password', password),

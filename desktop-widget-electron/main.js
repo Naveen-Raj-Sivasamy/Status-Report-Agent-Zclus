@@ -427,6 +427,22 @@ ipcMain.on('float-btn-move-by', (_e, { dx, dy }) => {
   const [x, y] = floatBtn.getPosition();
   floatBtn.setPosition(Math.round(x + dx), Math.round(y + dy));
 });
+// The floating icon's window is `transparent: true`, but a transparent
+// Electron window is NOT click-through by default — its entire rectangle
+// (67x67, bigger than the 55x55 visible circle — see floatbtn.html) blocks
+// every click to whatever's underneath it on the desktop/other windows,
+// even on the fully-transparent pixels. setIgnoreMouseEvents(true) makes
+// the whole window pass clicks straight through to the OS instead; the
+// renderer flips it back to false while the cursor is actually over the
+// visible icon (see floatbtn.html's mouseenter/mouseleave), so the icon
+// itself stays clickable/draggable but nothing around it is a dead zone
+// any more. `forward: true` keeps mousemove events reaching the renderer
+// even while ignoring, which is what lets it notice the cursor entering
+// the icon in the first place.
+ipcMain.on('float-btn-set-ignore-mouse', (_e, ignore) => {
+  if (!floatBtn) return;
+  floatBtn.setIgnoreMouseEvents(!!ignore, { forward: true });
+});
 ipcMain.handle('open-sheet', () => {
   if (config.SHEET_URL) shell.openExternal(config.SHEET_URL);
 });
@@ -658,6 +674,10 @@ function createFloatButton() {
   });
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // Starts click-through (see the float-btn-set-ignore-mouse handler
+  // above) — the renderer takes it back out of this mode the instant the
+  // cursor actually enters the visible icon.
+  win.setIgnoreMouseEvents(true, { forward: true });
   win.loadFile(path.join(__dirname, 'renderer', 'floatbtn.html'));
   win.once('ready-to-show', () => win.show());
 

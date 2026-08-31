@@ -68,8 +68,13 @@
     dragOrigin = { x: e.screenX, y: e.screenY }; // deltas from here on, not from the original point
   });
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', (e) => {
     dragOrigin = null; // didDrag is left as-is on purpose — the click handler below still needs it
+    // A fast drag can end with the cursor no longer over #hit (the window
+    // is still catching up to the cursor mid-drag) — re-check here so the
+    // window doesn't get stuck fully-interactive (i.e. still blocking
+    // clicks to whatever's underneath) after letting go outside the icon.
+    if (!isOverHit(e.clientX, e.clientY)) window.statusApp.setIgnoreMouseEvents(true);
   });
 
   hit.addEventListener('click', () => {
@@ -80,6 +85,24 @@
   hit.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     window.statusApp.showFabMenu();
+  });
+
+  // The window itself starts click-through (see main.js) — the entire
+  // 67x67 window is otherwise a dead zone over whatever's underneath it
+  // on the desktop, since a `transparent: true` Electron window is NOT
+  // click-through by default even on its fully-transparent pixels. Flip
+  // it back to interactive only while the cursor is actually over the
+  // visible 55x55 icon, so nothing near it is blocked any more.
+  // mouseenter/mouseleave still fire correctly in click-through mode
+  // because main.js passes `forward: true`, which keeps mousemove-derived
+  // events reaching this renderer even while clicks pass through.
+  function isOverHit(clientX, clientY) {
+    const r = hit.getBoundingClientRect();
+    return clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom;
+  }
+  hit.addEventListener('mouseenter', () => window.statusApp.setIgnoreMouseEvents(false));
+  hit.addEventListener('mouseleave', () => {
+    if (!dragOrigin) window.statusApp.setIgnoreMouseEvents(true); // don't interrupt an in-progress drag
   });
 </script>
 </body>

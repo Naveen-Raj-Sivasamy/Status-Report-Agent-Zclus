@@ -755,10 +755,11 @@ function listVisibleTabs() {
 }
 
 // Name of the auto-created config tab holding every dropdown/multiselect's
-// option list — a "List | Option" table, one row per option, grouped by
-// the "List" column into whatever the widget asks for by name (SITES,
-// ASSIGNEES, "Daily Status.Status", etc. — see field-config.js's
-// DEFAULT_OPTIONS keys, which this tab's starting rows exactly mirror).
+// option list — an "OptionsKey | Option" table, one row per option,
+// grouped by the OptionsKey column into whatever list a _FieldSchema row
+// asks for by name (SITES, ASSIGNEES, "Daily Status.Status", etc. — see
+// ensureFieldSchemaTab()'s OptionsKey values, which this tab's starting
+// rows exactly match).
 // Add, remove, reorder, or retype rows here any time — no code change, no
 // redeploy, just wait out CACHE_SECONDS or use the widget's Settings ->
 // "Refresh tabs & fields" to see it immediately. Starts with "_" so it's
@@ -776,7 +777,9 @@ var OPTIONS_TAB_NAME = '_Options';
 /** Created once, the first time anything asks for the tab list, pre-filled
  * with every option list this app currently ships with — so editing means
  * changing real starting values, not building a list from an empty tab.
- * Never touched again after that first creation, same as ensureLeaveTab(). */
+ * Never touched again after that first creation, same as ensureLeaveTab()
+ * — except for the header-rename self-heal below, which is safe to keep
+ * re-running forever since it's a no-op once the header already matches. */
 function ensureOptionsTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(OPTIONS_TAB_NAME);
@@ -787,6 +790,16 @@ function ensureOptionsTab() {
     // the way of its own purpose. Un-hides it every time this runs in
     // case it's still hidden from an earlier version of this function.
     sheet.showSheet();
+    // This column used to be labeled "List", which read as an unrelated
+    // term next to _FieldSchema's "OptionsKey" column — same value, two
+    // different names. Purely cosmetic (the code below reads column A by
+    // position, never by header text), so renaming it here can't break
+    // anything; only touches the header cell, never a data row, and only
+    // when it's still the old text.
+    var headerCell = sheet.getRange(1, 1);
+    if (headerCell.getValue() === 'List') {
+      headerCell.setValue('OptionsKey');
+    }
     return;
   }
   sheet = ss.insertSheet(OPTIONS_TAB_NAME);
@@ -803,7 +816,7 @@ function ensureOptionsTab() {
     'Leave.Type': ['Vacation', 'Sick', 'WFH', 'Holiday', 'Other'],
   };
 
-  var rows = [['List', 'Option']];
+  var rows = [['OptionsKey', 'Option']];
   Object.keys(defaults).forEach(function (list) {
     defaults[list].forEach(function (option) {
       rows.push([list, option]);
@@ -812,10 +825,11 @@ function ensureOptionsTab() {
   sheet.getRange(1, 1, rows.length, 2).setValues(rows);
 }
 
-/** Groups _Options' rows by the "List" column, in the order they appear
- * on the sheet (so reordering rows there reorders the dropdown too). A
- * row with a blank List or Option is skipped rather than producing a
- * broken/empty entry. */
+/** Groups _Options' rows by the "OptionsKey" column (matched against
+ * _FieldSchema's OptionsKey column of the same name), in the order they
+ * appear on the sheet (so reordering rows there reorders the dropdown
+ * too). A row with a blank OptionsKey or Option is skipped rather than
+ * producing a broken/empty entry. */
 function getOptionsMap() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(OPTIONS_TAB_NAME);
   if (!sheet) return {};
@@ -825,11 +839,11 @@ function getOptionsMap() {
   var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
   var map = {};
   values.forEach(function (row) {
-    var list = String(row[0]).trim();
+    var optionsKey = String(row[0]).trim();
     var option = String(row[1]).trim();
-    if (!list || !option) return;
-    if (!map[list]) map[list] = [];
-    map[list].push(option);
+    if (!optionsKey || !option) return;
+    if (!map[optionsKey]) map[optionsKey] = [];
+    map[optionsKey].push(option);
   });
   return map;
 }
@@ -993,22 +1007,33 @@ function getCategoriesMap() {
 // doesn't need to go find this source file to remember the rules. Starts
 // with "_" so it's hidden from the widget's tab list like every other
 // config tab — it's for a human reading the Sheet directly, not a widget
-// screen. Created once; never touched again after that (same as
-// ensureLeaveTab()), so feel free to edit/reformat it in the Sheet — this
-// function won't overwrite your changes on a later run.
+// screen.
+//
+// Unlike _Options/_FieldSchema/_Categories, this tab is pure reference
+// content, not something you're expected to hand-edit — so instead of
+// "created once, never touched again", it re-writes itself whenever
+// FEATURES_GUIDE_VERSION below is bumped (tracked via a note on cell A1,
+// invisible in the normal grid view), so an existing deployment's guide
+// stays in sync with whatever this function actually knows how to
+// document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
+var FEATURES_GUIDE_VERSION = '2';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getSheetByName(FEATURES_TAB_NAME)) return;
-  var sheet = ss.insertSheet(FEATURES_TAB_NAME);
+  var sheet = ss.getSheetByName(FEATURES_TAB_NAME);
+  if (sheet) {
+    if (sheet.getRange(1, 1).getNote() === FEATURES_GUIDE_VERSION) return; // already current
+  } else {
+    sheet = ss.insertSheet(FEATURES_TAB_NAME);
+  }
 
   var rows = [
     ['Task', 'Steps', 'Notes'],
     [
       'Add a new dropdown/multiselect option',
-      '1. Open _Options.\n2. Add a row: List = the OptionsKey from _FieldSchema for that field (e.g. "Leave.Type").\n3. Option = the new value.',
-      'No new List name needed if it already exists elsewhere.',
+      '1. Open _Options.\n2. Add a row: OptionsKey = the OptionsKey from _FieldSchema for that field (e.g. "Leave.Type").\n3. Option = the new value.',
+      'No new OptionsKey needed if it already exists elsewhere.',
     ],
     [
       'Edit an existing option',
@@ -1021,9 +1046,9 @@ function ensureFeaturesTab() {
       'Past entries keep the old value; it just stops being offered.',
     ],
     [
-      'Turn a plain-text field into a dropdown/date/etc.',
-      '1. Open _FieldSchema.\n2. Add a row: Tab = sheet tab name, Column = exact header text.\n3. Type = select / multiselect / date / week-auto / sequence.\n4. OptionsKey = a List name in _Options (add it there too if new).',
-      'week-auto also needs BasedOn = the Date column\'s header. sequence auto-numbers, no OptionsKey needed.',
+      'Turn a plain-text field into a dropdown/date/checkbox/etc.',
+      '1. Open _FieldSchema.\n2. Add a row: Tab = sheet tab name, Column = exact header text.\n3. Type = one of the Field Types below.\n4. OptionsKey = an OptionsKey in _Options (add it there too if new) — only needed for select/multiselect.',
+      'See "Field Types" rows below for the full list and what each needs.',
     ],
     [
       'Revert a field back to plain text',
@@ -1043,15 +1068,52 @@ function ensureFeaturesTab() {
     [
       'See your changes in the app right away',
       '1. Open the app -> Settings -> "Refresh tabs & fields (clear cache)".',
-      'Otherwise changes show up on their own within ~5 minutes (CACHE_SECONDS).',
+      'Otherwise changes show up on their own within ~5 minutes (CACHE_SECONDS) — the cache is why a change can look like it "didn\'t work" for a few minutes.',
     ],
     [
       "What's still a code change (not sheet-editable)",
       '- Which tabs count toward the Friday report (REPORT_TABS)\n- Who gets the report/reminder emails (Script Properties)\n- The shared connection token/password',
       'Ask whoever set up the backend for these.',
     ],
+    ['— Field Types (_FieldSchema "Type" column) —', '', ''],
+    [
+      'select',
+      'Dropdown, one choice.',
+      'Needs OptionsKey pointing at an _Options list.',
+    ],
+    [
+      'multiselect',
+      'Tap-to-toggle chips, any number of choices; saved as a comma-separated list.',
+      'Needs OptionsKey pointing at an _Options list.',
+    ],
+    [
+      'checkbox',
+      'A single Yes/No checkbox. Saves "Yes" when checked, blank when not.',
+      'No OptionsKey needed.',
+    ],
+    [
+      'date',
+      'A date picker.',
+      'No OptionsKey needed.',
+    ],
+    [
+      'week-auto',
+      'Read-only text, auto-filled as "Week N" from another field on the same form.',
+      'Needs BasedOn = that other column\'s exact header (usually a "date" field). No OptionsKey.',
+    ],
+    [
+      'sequence',
+      'Read-only text, auto-numbered: highest existing value in that column on the sheet, plus one.',
+      'No OptionsKey needed.',
+    ],
+    [
+      '(blank / no row at all)',
+      'Plain text box (or a taller text area if the column name contains "notes", "description", "blocker", "comment", or "detail").',
+      'The default for any field you never add to _FieldSchema.',
+    ],
   ];
 
+  sheet.clearContents();
   sheet.getRange(1, 1, rows.length, 3).setValues(rows);
   sheet.getRange(1, 1, 1, 3).setFontWeight('bold');
   sheet.setColumnWidths(1, 1, 220);
@@ -1059,6 +1121,7 @@ function ensureFeaturesTab() {
   sheet.setColumnWidths(3, 1, 260);
   sheet.getRange(2, 1, rows.length - 1, 3).setWrap(true);
   sheet.setFrozenRows(1);
+  sheet.getRange(1, 1).setNote(FEATURES_GUIDE_VERSION);
 }
 
 function getSheetByName(name) {

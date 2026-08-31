@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('statusApp', {
   saveCategories: (categories) => ipcRenderer.invoke('save-categories', categories),
   getReportSettings: () => ipcRenderer.invoke('get-report-settings'),
   saveReportSettings: (settings) => ipcRenderer.invoke('save-report-settings', settings),
+  getConnectGroups: () => ipcRenderer.invoke('get-connect-groups'),
+  saveConnectGroups: (groups) => ipcRenderer.invoke('save-connect-groups', groups),
   getWeeklyConnectTickets: () => ipcRenderer.invoke('get-weekly-connect-tickets'),
   updateWeeklyConnectTicket: (ticketId, status, comments) =>
     ipcRenderer.invoke('update-weekly-connect-ticket', { ticketId, status, comments }),

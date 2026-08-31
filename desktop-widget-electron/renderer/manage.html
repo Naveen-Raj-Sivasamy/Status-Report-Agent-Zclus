@@ -172,8 +172,8 @@
       <div id="reminder-recipients-rows"></div>
       <button class="icon-btn" type="button" id="add-reminder-recipient-btn">+ Add email</button>
 
-      <div class="field-label" style="margin-top:14px;">Teams webhook URL</div>
-      <p class="hint" style="margin: -2px 0 6px;">Used for the Friday reminder and Weekly Connect's running ticket post. Leave blank to turn Teams posting off entirely.</p>
+      <div class="field-label" style="margin-top:14px;">Teams webhook URL (Friday reminder)</div>
+      <p class="hint" style="margin: -2px 0 6px;">Just the Friday reminder — Weekly Connect posts to its own group webhooks below instead. Leave blank to turn this one off.</p>
       <input id="teams-webhook-url" type="text" placeholder="https://..." style="width:100%;" />
 
       <div class="row-actions">
@@ -181,6 +181,18 @@
       </div>
       <div class="err" id="report-settings-err"></div>
       <div class="ok" id="report-settings-ok"></div>
+    </div>
+
+    <div class="section">
+      <h3>Connect Groups</h3>
+      <p class="hint">Each group posts its Weekly Connect tickets to its own Teams channel — pick which group a ticket belongs to right on the ticket form. Add another group any time; no code change needed.</p>
+      <div id="connect-groups"></div>
+      <div class="row-actions">
+        <button class="secondary" id="add-connect-group-btn">+ Add group</button>
+        <button id="save-connect-groups-btn">Save Connect Groups</button>
+      </div>
+      <div class="err" id="connect-groups-err"></div>
+      <div class="ok" id="connect-groups-ok"></div>
     </div>
 
     <button class="secondary" id="close-btn" style="width:100%;">Close</button>
@@ -195,6 +207,7 @@
   let categoriesMap = {};
   let allTabs = []; // every real tab, including currently-hidden ones — Report Settings only
   let reportSettings = { reportTabs: [], hiddenTabs: [], reportRecipients: [], reminderRecipients: [], teamsWebhookUrl: '' };
+  let connectGroups = []; // [{name, webhookUrl}, ...]
 
   // Mirrors _FieldSchema's actual supported Type values exactly — see
   // buildFieldInput() in index.html and the _Features guide tab. '' means
@@ -231,12 +244,13 @@
     document.getElementById('gate').classList.add('hidden');
     document.getElementById('content').classList.remove('hidden');
     renderCompareTable(); // static — doesn't need the fetches below
-    const [tabsRes, optsRes, fsRes, catRes, reportRes] = await Promise.all([
+    const [tabsRes, optsRes, fsRes, catRes, reportRes, groupsRes] = await Promise.all([
       window.statusApp.getTabs(),
       window.statusApp.getOptions(),
       window.statusApp.getFieldSchema(),
       window.statusApp.getCategories(),
       window.statusApp.getReportSettings(),
+      window.statusApp.getConnectGroups(),
     ]);
     liveTabs = (tabsRes && tabsRes.tabs) || [];
     optionsMap = (optsRes && optsRes.options) || {};
@@ -244,10 +258,12 @@
     categoriesMap = (catRes && catRes.categories) || {};
     allTabs = (reportRes && reportRes.allTabs) || [];
     reportSettings = (reportRes && reportRes.reportSettings) || reportSettings;
+    connectGroups = (groupsRes && groupsRes.groups) || [];
     renderOptions();
     renderFieldSchema();
     renderCategories();
     renderReportSettings();
+    renderConnectGroups();
   }
 
   async function saveSection(btnId, errId, okId, action) {
@@ -283,7 +299,8 @@
     ['Choose which tabs feed the Friday report', 'yes', 'yes'],
     ['Hide a tab from the app', 'yes', 'yes'],
     ['Change who gets report/reminder emails', 'yes', 'yes'],
-    ['Set/change the Teams webhook URL', 'yes', 'yes'],
+    ['Set/change the Friday-reminder Teams webhook', 'yes', 'yes'],
+    ['Add/edit/delete a Weekly Connect group', 'yes', 'yes'],
     ['Create a brand-new tab', 'yes', 'no'],
     ['Rename or delete an existing tab', 'yes', 'no'],
     ['Change the connection token / admin password', 'no', 'yes'],
@@ -604,6 +621,58 @@
     // here is reflected the next time either of those adds a new row,
     // without needing a full reload.
     liveTabs = allTabs.filter((t) => !settings.hiddenTabs.includes(t));
+  });
+
+  // -------------------- Connect Groups --------------------
+
+  function buildConnectGroupRow(name, webhookUrl) {
+    const row = document.createElement('div');
+    row.className = 'group';
+    const header = document.createElement('div');
+    header.className = 'group-header';
+    const nameInput = document.createElement('input');
+    nameInput.className = 'cg-name-input';
+    nameInput.value = name || '';
+    nameInput.placeholder = 'Group name (e.g. CMS Weekly Connect)';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn';
+    del.textContent = '✕ Remove group';
+    del.onclick = () => row.remove();
+    header.appendChild(nameInput);
+    header.appendChild(del);
+    row.appendChild(header);
+
+    const urlInput = document.createElement('input');
+    urlInput.className = 'cg-webhook-input';
+    urlInput.placeholder = 'Teams webhook URL for this group';
+    urlInput.value = webhookUrl || '';
+    urlInput.style.width = '100%';
+    row.appendChild(urlInput);
+
+    return row;
+  }
+
+  function renderConnectGroups() {
+    const container = document.getElementById('connect-groups');
+    container.innerHTML = '';
+    connectGroups.forEach((g) => container.appendChild(buildConnectGroupRow(g.name, g.webhookUrl)));
+  }
+
+  document.getElementById('add-connect-group-btn').addEventListener('click', () => {
+    document.getElementById('connect-groups').appendChild(buildConnectGroupRow('', ''));
+  });
+
+  document.getElementById('save-connect-groups-btn').addEventListener('click', async () => {
+    const rows = Array.from(document.querySelectorAll('#connect-groups .group'));
+    const groups = rows
+      .map((r) => ({
+        name: r.querySelector('.cg-name-input').value.trim(),
+        webhookUrl: r.querySelector('.cg-webhook-input').value.trim(),
+      }))
+      .filter((g) => g.name);
+    await saveSection('save-connect-groups-btn', 'connect-groups-err', 'connect-groups-ok', () => window.statusApp.saveConnectGroups(groups));
+    connectGroups = groups;
   });
 
   document.getElementById('close-btn').addEventListener('click', () => window.close());

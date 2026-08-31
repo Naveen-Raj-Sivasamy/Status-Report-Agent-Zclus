@@ -420,6 +420,26 @@ function doPost(e) {
       return jsonOut({ ok: true, message: 'Ticket updated.' });
     }
 
+    /** Read/write for _ConnectGroups — a webhook URL is a write capability,
+     * same reasoning as getReportSettings above for going through doPost
+     * (token-gated) instead of doGet. */
+    if (body.action === 'getConnectGroups') {
+      return jsonOut({ ok: true, groups: getConnectGroups() });
+    }
+    if (body.action === 'saveConnectGroups') {
+      var groupsLock = LockService.getScriptLock();
+      if (!groupsLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        writeConnectGroups(body.groups || []);
+      } finally {
+        groupsLock.releaseLock();
+      }
+      CacheService.getScriptCache().remove('options'); // ConnectGroups synced into _Options
+      return jsonOut({ ok: true, message: 'Connect groups saved.' });
+    }
+
     /** Called by the build-release CI workflow right after it publishes a
      * new installer, so the widget's "update available" banner and its
      * DownloadUrl-driven "Get it" button stay in sync automatically. */
@@ -490,7 +510,7 @@ function doPost(e) {
     // own comment), so a failed post here can't turn a successful save into
     // an error response — the ticket is already safely on the sheet either way.
     if (body.tab === WEEKLY_CONNECT_TAB_NAME) {
-      postWeeklyConnectToTeams();
+      postWeeklyConnectToTeams(values['Group'] || '');
     }
     return jsonOut({ ok: true, message: 'Saved to "' + body.tab + '".' });
   } catch (err) {
@@ -855,6 +875,10 @@ function listVisibleTabsUncached() {
   // Must come AFTER the three ensure*Tab() calls above — it merges into
   // whatever they just seeded (or already had) via get/write*Map(), and
   // running first would let its narrower write clobber their migration.
+  // ensureConnectGroupsTab() must come before ensureWeeklyConnectTab(), so
+  // the Group field's dropdown already has a real "ConnectGroups" _Options
+  // entry to point at by the time Weekly_Connect's own schema is seeded.
+  ensureConnectGroupsTab();
   ensureWeeklyConnectTab();
   ensureFeaturesTab();
   var hiddenTabs = getHiddenTabs();
@@ -934,15 +958,15 @@ function normalizeDateForCompare(raw, tz) {
 // _Options/_Categories rows itself, the first time it creates the tab.
 var WEEKLY_CONNECT_TAB_NAME = 'Weekly_Connect';
 var WEEKLY_CONNECT_COLUMNS = [
-  'Ticket ID', 'Date', 'Requester', 'Owner', 'Site', 'Type',
+  'Ticket ID', 'Group', 'Date', 'Requester', 'Owner', 'Site', 'Type',
   'Issue', 'URL', 'Attachment', 'Priority', 'Status', 'Comments',
 ];
 
 /** Created once, the first time anything asks for the tab list, if it
  * doesn't already exist. Never touches the tab again once it's there —
  * same as ensureLeaveTab() — so renaming columns or adding your own is
- * completely safe (just keep 'Ticket ID' and 'Status' if you want
- * updateWeeklyConnectTicket()/the Teams post to keep working). */
+ * completely safe (just keep 'Ticket ID', 'Group', and 'Status' if you
+ * want updateWeeklyConnectTicket()/the Teams post to keep working). */
 function ensureWeeklyConnectTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (ss.getSheetByName(WEEKLY_CONNECT_TAB_NAME)) return;
@@ -957,11 +981,15 @@ function ensureWeeklyConnectTab() {
  * Options" screen uses, so this is just those same edits made
  * automatically instead of by hand). Requester/Owner/Site reuse option
  * lists that already exist elsewhere in the app (REQUESTERS/ASSIGNEES/
- * SITES) rather than inventing new ones. */
+ * SITES) rather than inventing new ones. Group's own choices come from
+ * _ConnectGroups (see ensureConnectGroupsTab()), synced into _Options'
+ * ConnectGroups key — this just points the Group field at that key, same
+ * as every other select field. */
 function seedWeeklyConnectConfig_() {
   var fsMap = getFieldSchemaMap();
   fsMap[WEEKLY_CONNECT_TAB_NAME] = {
     'Ticket ID': { type: 'sequence' },
+    'Group': { type: 'select', optionsKey: 'ConnectGroups' },
     'Date': { type: 'date' },
     'Requester': { type: 'select', optionsKey: 'REQUESTERS' },
     'Owner': { type: 'select', optionsKey: 'ASSIGNEES' },
@@ -984,6 +1012,84 @@ function seedWeeklyConnectConfig_() {
     catMap['Weekly Connect'] = existing.concat([WEEKLY_CONNECT_TAB_NAME]);
     writeCategoriesMap(catMap);
   }
+}
+
+// One Weekly Connect can serve more than one recurring meeting/channel —
+// "CMS Weekly Connect" today, something else you add later, each posting
+// to its own Teams channel. _ConnectGroups (Group Name | Teams Webhook
+// URL) is the list of those groups: every ticket picks one via the Group
+// field (seeded above), and postWeeklyConnectToTeams() posts each
+// ticket's current week to THAT group's webhook, not a single shared one.
+// Fully Sheet/App-editable — add a row here (or use the in-app "Manage
+// Fields & Options" -> Connect Groups screen) any time you need another
+// group; no code change, no redeploy.
+var CONNECT_GROUPS_TAB_NAME = '_ConnectGroups';
+
+/** Created once. Seeds a single starting group, "CMS Weekly Connect" —
+ * this app's own origin story, not a hardcoded requirement — carrying
+ * forward whatever _Config's TeamsWebhookUrl already held (from the
+ * single-webhook mode this replaces) as that group's starting webhook, so
+ * nothing already configured gets silently dropped. An org that renames
+ * or deletes that row, or adds more, is fully in control from here on. */
+function ensureConnectGroupsTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(CONNECT_GROUPS_TAB_NAME)) return;
+  var sheet = ss.insertSheet(CONNECT_GROUPS_TAB_NAME);
+  sheet.getRange(1, 1, 1, 2).setValues([['Group Name', 'Teams Webhook URL']]);
+  var carriedOverWebhook = getConfigValue('TeamsWebhookUrl') || getScriptProp_('TEAMS_WEBHOOK_URL');
+  sheet.getRange(2, 1, 1, 2).setValues([['CMS Weekly Connect', carriedOverWebhook]]);
+  syncConnectGroupOptions_([{ name: 'CMS Weekly Connect', webhookUrl: carriedOverWebhook }]);
+}
+
+/** [{name, webhookUrl}, ...] in sheet row order — order matters here,
+ * since it's also the order the Group dropdown offers choices in. */
+function getConnectGroups() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONNECT_GROUPS_TAB_NAME);
+  if (!sheet) return [];
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return [];
+  var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  var groups = [];
+  values.forEach(function (row) {
+    var name = String(row[0]).trim();
+    if (!name) return;
+    groups.push({ name: name, webhookUrl: String(row[1]).trim() });
+  });
+  return groups;
+}
+
+/** Replaces _ConnectGroups' data rows wholesale (same "replace the whole
+ * thing" shape as writeOptionsMap() etc) and keeps _Options' ConnectGroups
+ * key in sync with the new group names, so the Group field's dropdown
+ * (an ordinary select, see seedWeeklyConnectConfig_()) never needs its
+ * own bespoke read path — it just reads _Options like every other select
+ * field already does. */
+function writeConnectGroups(groups) {
+  ensureConnectGroupsTab();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONNECT_GROUPS_TAB_NAME);
+  var rows = (groups || [])
+    .map(function (g) { return [String(g.name || '').trim(), String(g.webhookUrl || '').trim()]; })
+    .filter(function (r) { return r[0]; });
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, 2).clearContent();
+  if (rows.length) sheet.getRange(2, 1, rows.length, 2).setValues(rows);
+  syncConnectGroupOptions_(rows.map(function (r) { return { name: r[0] }; }));
+}
+
+function syncConnectGroupOptions_(groups) {
+  var optMap = getOptionsMap();
+  optMap['ConnectGroups'] = groups.map(function (g) { return g.name; });
+  writeOptionsMap(optMap);
+}
+
+/** The webhook URL for one named group, or '' if that group isn't
+ * configured (a blank Group on the ticket, a group whose webhook was
+ * never set, or a group that's since been removed from _ConnectGroups —
+ * postWeeklyConnectToTeams() treats all of these as "nothing to post",
+ * same silent no-op as Teams being off entirely). */
+function getConnectGroupWebhookUrl(groupName) {
+  var match = getConnectGroups().filter(function (g) { return g.name === groupName; })[0];
+  return match ? match.webhookUrl : '';
 }
 
 /** Every Weekly Connect ticket as a plain object per row, newest first —
@@ -1077,22 +1183,28 @@ function getCurrentConnectWeekRange() {
   return { start: weekStart, end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59, 59) };
 }
 
-/** Posts (as a fresh message — see the comment on TEAMS_WEBHOOK_URL/the
- * Weekly Connect plan for why this isn't a truly edited single message)
- * every ticket raised in the current connect week. Silently no-ops if no
- * Teams webhook is configured (getTeamsWebhookUrl()) — Weekly Connect
+/** Posts (as a fresh message — see the comment on CONNECT_GROUPS_TAB_NAME/
+ * the Weekly Connect plan for why this isn't a truly edited single
+ * message) every `groupName` ticket raised in the current connect week, to
+ * THAT group's own webhook — not a single shared one, since one Weekly
+ * Connect can serve more than one recurring meeting/channel. Silently
+ * no-ops if `groupName` isn't blank but has no matching _ConnectGroups
+ * webhook, or falls back to the legacy single getTeamsWebhookUrl() if
+ * `groupName` itself is blank (a ticket saved before Group existed, or
+ * with no groups configured at all yet) — either way, Weekly Connect
  * works fine without Teams, same as the Friday reminder does. Never
  * throws: a Teams outage should never take down the actual save, which is
  * why doPost calls this AFTER appendRow already succeeded, in its own
  * try/catch. */
-function postWeeklyConnectToTeams() {
-  var teamsWebhookUrl = getTeamsWebhookUrl();
+function postWeeklyConnectToTeams(groupName) {
+  var teamsWebhookUrl = groupName ? getConnectGroupWebhookUrl(groupName) : getTeamsWebhookUrl();
   if (!teamsWebhookUrl) return;
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(WEEKLY_CONNECT_TAB_NAME);
   if (!sheet) return;
 
   var range = getCurrentConnectWeekRange();
   var tickets = getWeeklyConnectTickets().filter(function (t) {
+    if (groupName && (t['Group'] || '') !== groupName) return false;
     // 'T00:00:00' (no zone suffix) forces local-time parsing — a bare
     // 'yyyy-MM-dd' string parses as UTC midnight instead, which silently
     // shifts a day backward once compared against range.start/end (built
@@ -1110,7 +1222,8 @@ function postWeeklyConnectToTeams() {
     var who = t['Requester'] ? ' — ' + t['Requester'] : '';
     return '**Q' + t['Ticket ID'] + '**: ' + (t['Issue'] || '(no description)') + who;
   });
-  var text = '**Weekly Connect — week of ' + weekLabel + '**\n\n' +
+  var heading = groupName || 'Weekly Connect';
+  var text = '**' + heading + ' — week of ' + weekLabel + '**\n\n' +
     (lines.length ? lines.join('\n\n') : '_Nothing logged yet this week._');
 
   try {
@@ -1461,7 +1574,7 @@ function writeCategoriesMap(map) {
 // stays in sync with whatever this function actually knows how to
 // document. Bump the version any time you change the rows below.
 var FEATURES_TAB_NAME = '_Features';
-var FEATURES_GUIDE_VERSION = '8';
+var FEATURES_GUIDE_VERSION = '9';
 
 function ensureFeaturesTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1536,13 +1649,18 @@ function ensureFeaturesTab() {
     ],
     [
       'Weekly Connect: log a ticket / update one',
-      '1. Widget -> Weekly Connect category -> Weekly_Connect -> fill the form to log a new one.\n2. From that same screen, "View & update tickets" -> pick one -> set Status/Comments -> Save.',
-      "New tickets auto-post to Teams (once a webhook URL is set — see the row below) as a running list scoped to the current Wed-to-Wed week. Status/Comments are the one thing in this whole app that edits an existing row instead of appending.",
+      '1. Widget -> Weekly Connect category -> Weekly_Connect -> pick a Group, fill the rest, submit.\n2. From that same screen, "View & update tickets" -> pick one -> set Status/Comments -> Save.',
+      "New tickets auto-post to their Group's own Teams channel (see the row below) as a running list scoped to the current Wed-to-Wed week. Status/Comments are the one thing in this whole app that edits an existing row instead of appending.",
     ],
     [
-      'Set (or change) the Teams webhook URL',
+      'Add a Connect Group (another recurring meeting/channel)',
+      '1. Open _ConnectGroups.\n2. Add a row: Group Name = whatever you\'ll call it, Teams Webhook URL = that channel\'s webhook.',
+      'Or use the app\'s "Manage Fields & Options" -> Connect Groups. Shows up as a new Group choice on the Weekly_Connect form immediately — no code change. Started with one group, "CMS Weekly Connect" — add as many more as you actually run.',
+    ],
+    [
+      'Teams webhook for the Friday reminder',
       '1. Open _Config.\n2. Edit the TeamsWebhookUrl row.',
-      'Or use the app\'s "Manage Fields & Options" -> Report Settings. Leave blank to turn Teams posting off entirely — nothing else about Weekly Connect or the Friday reminder depends on it.',
+      'Separate from Connect Groups above — this one\'s just for the Friday reminder. Or use the app\'s "Manage Fields & Options" -> Report Settings. Leave blank to turn it off.',
     ],
     [
       "What's still a code change (not sheet- or app-editable)",
@@ -1621,7 +1739,8 @@ function writeSheetVsAppTable_(sheet) {
     ['Choose which tabs feed the Friday report', 'Yes', 'Yes'],
     ['Hide a tab from the app', 'Yes', 'Yes'],
     ['Change who gets report/reminder emails', 'Yes', 'Yes'],
-    ['Set/change the Teams webhook URL', 'Yes', 'Yes'],
+    ['Set/change the Friday-reminder Teams webhook', 'Yes', 'Yes'],
+    ['Add/edit/delete a Weekly Connect group', 'Yes', 'Yes'],
     ['Create a brand-new tab', 'Yes', 'No'],
     ['Rename or delete an existing tab', 'Yes', 'No'],
     ['Change the connection token / admin password', 'No', 'Yes'],

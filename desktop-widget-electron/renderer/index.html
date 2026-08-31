@@ -1071,7 +1071,7 @@
           </div>
         </div>
         <div class="wc-ticket-issue">${escapeHtml(t.Issue || '(no description)')}</div>
-        <div class="wc-ticket-meta">${escapeHtml(t.Requester || 'Unknown')} · ${escapeHtml(t.Date || '')}</div>
+        <div class="wc-ticket-meta">${t.Group ? escapeHtml(t.Group) + ' · ' : ''}${escapeHtml(t.Requester || 'Unknown')} · ${escapeHtml(t.Date || '')}</div>
       `;
       btn.onclick = () => showWeeklyConnectEdit(t);
       els.main.appendChild(btn);
@@ -1093,7 +1093,7 @@
     els.main.innerHTML = `
       <div class="wc-detail-issue">${escapeHtml(ticket.Issue || '(no description)')}</div>
       <div class="wc-detail-meta">
-        ${escapeHtml(ticket.Requester || 'Unknown')} · ${escapeHtml(ticket.Date || '')}${ticket.URL ? ' · <a href="#" id="wc-url-link">Reference link</a>' : ''}
+        ${ticket.Group ? escapeHtml(ticket.Group) + ' · ' : ''}${escapeHtml(ticket.Requester || 'Unknown')} · ${escapeHtml(ticket.Date || '')}${ticket.URL ? ' · <a href="#" id="wc-url-link">Reference link</a>' : ''}
       </div>
     `;
     if (ticket.URL) {

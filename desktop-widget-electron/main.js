@@ -397,6 +397,17 @@ ipcMain.handle('save-report-settings', async (_e, settings) => {
   tabsCache = null; // HiddenTabs can change which tabs the widget shows
   return result;
 });
+// Connect Groups — same doPost/token-gated reasoning as report settings
+// (a webhook URL is a write capability). Group names are synced into
+// _Options server-side, so a save here also invalidates this process's
+// options cache — otherwise the ticket form's Group dropdown would keep
+// showing whatever list was cached before the edit.
+ipcMain.handle('get-connect-groups', async () => apiPostBody({ action: 'getConnectGroups' }));
+ipcMain.handle('save-connect-groups', async (_e, groups) => {
+  const result = await apiPostBody({ action: 'saveConnectGroups', groups });
+  optionsCache = null;
+  return result;
+});
 // Weekly Connect's ticket list — same reasoning as report settings above
 // for going through GET on the backend, not a doPost round-trip: it's a
 // plain GET action there (see Code.gs), fetched fresh every time this

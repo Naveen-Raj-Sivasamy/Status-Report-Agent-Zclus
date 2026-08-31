@@ -16,6 +16,13 @@ const TEMPLATE_PATH = path.join(__dirname, 'config.template.json');
 // folder — never baked into the installer, never shared between installs.
 const USER_CONFIG_PATH = path.join(app.getPath('userData'), 'user-config.json');
 const POSITION_PATH = path.join(app.getPath('userData'), 'float-position.json');
+// Remembers the Connect/Manage windows' last resized size, per window —
+// {connect: {width, height}, manage: {width, height}}. Both windows used
+// to be fixed-size (Connect literally couldn't be resized at all), which
+// meant whatever default shipped was what everyone was stuck with. Now
+// resizable, and whatever size someone drags them to sticks across opens
+// instead of reverting to the shipped default every time.
+const WINDOW_SIZES_PATH = path.join(app.getPath('userData'), 'window-sizes.json');
 // Connection details entered through the app itself (the "Connect to your
 // organization" screen) — this is what makes a store-distributed build
 // (no config.template.json baked in at all) work: whoever installs it
@@ -563,10 +570,14 @@ ipcMain.handle('open-connection-settings', () => {
 });
 
 function createConnectWindow() {
+  var saved = loadSavedWindowSize('connect');
   var win = new BrowserWindow({
-    width: 420,
-    height: 480,
-    resizable: false,
+    width: saved ? saved.width : 420,
+    height: saved ? saved.height : 480,
+    minWidth: 360,
+    minHeight: 420,
+    resizable: true, // was hard-blocked — the fixed size didn't fit every
+    // screen/DPI setup well and there was no way around it
     fullscreenable: false,
     minimizable: false,
     maximizable: false,
@@ -584,6 +595,7 @@ function createConnectWindow() {
   });
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'connect.html'));
+  wireWindowSizePersistence(win, 'connect');
   win.on('closed', () => {
     if (connectWin === win) connectWin = null;
   });
@@ -608,11 +620,15 @@ ipcMain.handle('open-manage-screen', () => {
 });
 
 function createManageWindow() {
+  var saved = loadSavedWindowSize('manage');
   var win = new BrowserWindow({
-    width: 560,
-    height: 700,
-    minWidth: 480,
+    width: saved ? saved.width : 480, // was 560 — a bit wide for what's
+    // mostly a single column of fields; still resizable up from here any
+    // time more room is actually needed (e.g. the wider Field Types rows)
+    height: saved ? saved.height : 640,
+    minWidth: 420,
     minHeight: 420,
+    resizable: true,
     fullscreenable: false,
     frame: false, // see the same comment in createConnectWindow() above
     title: 'Manage Fields & Options',
@@ -625,6 +641,7 @@ function createManageWindow() {
   });
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'manage.html'));
+  wireWindowSizePersistence(win, 'manage');
   win.on('closed', () => {
     if (manageWin === win) manageWin = null;
   });
@@ -742,6 +759,41 @@ function savePosition(x, y) {
   } catch {
     /* best-effort */
   }
+}
+
+function loadSavedWindowSize(key) {
+  try {
+    var all = JSON.parse(fs.readFileSync(WINDOW_SIZES_PATH, 'utf8'));
+    return all[key] || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveWindowSize(key, width, height) {
+  try {
+    var all = {};
+    try { all = JSON.parse(fs.readFileSync(WINDOW_SIZES_PATH, 'utf8')); } catch { /* first save ever */ }
+    all[key] = { width, height };
+    fs.writeFileSync(WINDOW_SIZES_PATH, JSON.stringify(all));
+  } catch {
+    /* best-effort */
+  }
+}
+
+// Debounced the same way the floating icon's position-save already is —
+// 'resize' fires continuously while dragging an edge, not just once at
+// the end, so writing on every event would mean a lot of redundant disk
+// writes for one drag gesture.
+function wireWindowSizePersistence(win, key) {
+  var saveTimer = null;
+  win.on('resize', () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      var [w, h] = win.getSize();
+      saveWindowSize(key, w, h);
+    }, 250);
+  });
 }
 
 function createFloatButton() {

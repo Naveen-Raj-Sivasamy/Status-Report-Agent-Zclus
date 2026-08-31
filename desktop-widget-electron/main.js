@@ -425,6 +425,9 @@ ipcMain.handle('get-weekly-connect-tickets', async () => apiGet({ action: 'weekl
 ipcMain.handle('update-weekly-connect-ticket', async (_e, { ticketId, status, comments }) =>
   apiPostBody({ action: 'updateWeeklyConnectTicket', ticketId, status, comments })
 );
+ipcMain.handle('post-weekly-connect-to-teams', async (_e, { group, range }) =>
+  apiPostBody(Object.assign({ action: 'postWeeklyConnectToTeamsNow', group }, range || {})).catch((err) => ({ ok: false, error: err.message }))
+);
 ipcMain.handle('download-report', async (_e, range) => {
   const data = await apiPostBody(Object.assign({ action: 'downloadReport' }, range || {}));
   const { canceled, filePath } = await dialog.showSaveDialog({

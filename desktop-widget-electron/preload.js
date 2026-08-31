@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('statusApp', {
   getWeeklyConnectTickets: () => ipcRenderer.invoke('get-weekly-connect-tickets'),
   updateWeeklyConnectTicket: (ticketId, status, comments) =>
     ipcRenderer.invoke('update-weekly-connect-ticket', { ticketId, status, comments }),
+  postWeeklyConnectToTeamsNow: (group, range) =>
+    ipcRenderer.invoke('post-weekly-connect-to-teams', { group, range }),
   submitEntry: (tab, values) => ipcRenderer.invoke('submit-entry', { tab, values }),
   sendReportNow: (range) => ipcRenderer.invoke('send-report-now', range),
   downloadReport: (range) => ipcRenderer.invoke('download-report', range),

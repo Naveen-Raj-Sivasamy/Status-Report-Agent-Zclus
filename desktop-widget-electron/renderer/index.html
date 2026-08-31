@@ -1286,6 +1286,14 @@
     });
     els.main.appendChild(filterRow);
 
+    const postBtn = document.createElement('button');
+    postBtn.type = 'button';
+    postBtn.className = 'tab-btn';
+    postBtn.style.cssText = 'width:100%; margin-bottom:8px;';
+    postBtn.textContent = '📨 Post to Teams…';
+    postBtn.onclick = showPostToTeams;
+    els.main.appendChild(postBtn);
+
     const visible = wcFilter === 'open'
       ? wcTickets.filter((t) => ['Resolved', 'Deferred'].indexOf(t.Status || '') === -1)
       : wcTickets;
@@ -1326,6 +1334,87 @@
     backBtn.textContent = '← Back';
     backBtn.onclick = () => showForm(WEEKLY_CONNECT_TAB);
     els.main.appendChild(backBtn);
+  }
+
+  // Manual, on-demand — replaces the old "auto-post whatever fell in a
+  // fixed Wednesday-to-Wednesday window" behavior. The real discussion
+  // this compiles for doesn't happen on a fixed weekday, so instead of
+  // guessing a window, this reuses Report Generator's own range picker
+  // (rangeSubFieldsHtml/computeRangeFromOptions below) and just asks:
+  // which group, which dates.
+  function showPostToTeams() {
+    els.sub.textContent = 'Post to Teams';
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.main.style.minHeight = '';
+    const groups = resolveOptions('ConnectGroups', liveOptions);
+    els.main.innerHTML = `
+      ${groups.length ? `
+        <div class="field">
+          <label>Group</label>
+          <select id="post-teams-group">
+            ${groups.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}
+          </select>
+        </div>` : `<p class="login-hint">No Connect Groups configured yet — this will post to the legacy single Teams webhook, if one's set.</p>`}
+      <div class="field">
+        <label>Range</label>
+        <select id="range-type">
+          <option value="custom" selected>Custom Range</option>
+          <option value="month">Monthly</option>
+          <option value="quarter">Quarterly</option>
+          <option value="year">Yearly</option>
+        </select>
+        <!-- No "This Week" here on purpose — that option resolves to a
+             backend default (Report Generator's Monday-based week), and
+             the whole point of this screen is never guessing a window;
+             every post needs an explicit range someone actually picked. -->
+      </div>
+      <div id="range-fields"></div>
+      <div class="login-err" id="post-teams-err"></div>
+      <button class="primary" id="post-teams-btn" style="width:100%;">Post to Teams</button>
+      <button class="secondary" id="post-teams-back-btn" style="width:100%; margin-top:8px;">Back</button>
+    `;
+
+    const rangeFields = document.getElementById('range-fields');
+    const rangeType = document.getElementById('range-type');
+    const renderSubFields = () => { rangeFields.innerHTML = rangeSubFieldsHtml(rangeType.value); };
+    rangeType.onchange = renderSubFields;
+    renderSubFields();
+
+    document.getElementById('post-teams-back-btn').onclick = renderWeeklyConnectList;
+
+    document.getElementById('post-teams-btn').onclick = async () => {
+      const errEl = document.getElementById('post-teams-err');
+      errEl.textContent = '';
+      let range;
+      try {
+        range = computeRangeFromOptions();
+        if (!range) throw new Error('Pick a specific date range — "This Week" alone isn\'t enough here.');
+      } catch (err) {
+        errEl.textContent = err.message;
+        return;
+      }
+      const groupSelect = document.getElementById('post-teams-group');
+      const group = groupSelect ? groupSelect.value : '';
+      const btn = document.getElementById('post-teams-btn');
+      btn.disabled = true;
+      btn.textContent = 'Posting…';
+      try {
+        const result = await window.statusApp.postWeeklyConnectToTeamsNow(group, range);
+        if (!result || !result.ok) throw new Error((result && result.error) || 'Post failed.');
+        showResult({
+          success: true,
+          title: 'Posted to Teams',
+          subtitle: result.message,
+          doneLabel: 'Done',
+          onDone: showWeeklyConnectTickets,
+        });
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Post to Teams';
+        errEl.textContent = err.message || String(err);
+      }
+    };
   }
 
   function showWeeklyConnectEdit(ticket) {

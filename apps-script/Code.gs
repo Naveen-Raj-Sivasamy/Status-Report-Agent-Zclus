@@ -420,6 +420,23 @@ function doPost(e) {
       return jsonOut({ ok: true, message: 'Ticket updated.' });
     }
 
+    /** The manual "Post to Teams" action — replaces the old auto-post on
+     * every save (see the comment where that used to be called, right
+     * after appendRow above). Runs synchronously and returns the real
+     * outcome: unlike a ticket save, nothing else is waiting on this, and
+     * whoever clicked the button should see whether it actually worked,
+     * not just trust it happened. start/end are required (not defaulted
+     * to "this week") — the whole point is picking the range that matches
+     * whenever the real discussion actually happened. */
+    if (body.action === 'postWeeklyConnectToTeamsNow') {
+      var postRange = parseRangeFromRequest(body);
+      if (!postRange) {
+        return jsonOut({ ok: false, error: 'Pick a date range first.' });
+      }
+      var postResult = postWeeklyConnectToTeams(body.group || '', postRange);
+      return jsonOut({ ok: postResult.ok, message: postResult.message, error: postResult.ok ? undefined : postResult.message });
+    }
+
     /** Read/write for _ConnectGroups — a webhook URL is a write capability,
      * same reasoning as getReportSettings above for going through doPost
      * (token-gated) instead of doGet. */
@@ -643,19 +660,16 @@ function doPost(e) {
     } finally {
       lock.releaseLock();
     }
-    // Scheduled, not called directly — UrlFetchApp.fetch() is a blocking
-    // call with no async/fire-and-forget option in Apps Script, so calling
-    // postWeeklyConnectToTeams() right here would make THIS save wait on
-    // however long Teams (or a Power Automate flow behind the webhook)
-    // takes to respond, which can be several seconds — the sheet write
-    // above already succeeded by this point, so there's no reason the
-    // widget's "Saving…" should still be sitting there because of it.
-    // scheduleWeeklyConnectTeamsPost_() queues the post and returns
-    // immediately; the actual Teams call happens moments later in a
-    // separate execution, after this response has already gone out.
-    if (body.tab === WEEKLY_CONNECT_TAB_NAME) {
-      scheduleWeeklyConnectTeamsPost_(values['Group'] || '');
-    }
+    // Used to auto-post to Teams right here on every single ticket saved,
+    // compiling whatever fell in a fixed Wednesday-to-Wednesday window.
+    // Dropped that: the real discussion this was compiling for doesn't
+    // happen on a fixed day — it moves around week to week — so a rigid
+    // auto-window kept posting the wrong set of tickets. Posting to Teams
+    // is now its own explicit action (postWeeklyConnectToTeamsNow below),
+    // triggered from the widget with whatever date range actually matches
+    // this week's real discussion, same custom-range picker Report
+    // Generator already uses — see the ticket list screen's "Post to
+    // Teams" button.
     return jsonOut({ ok: true, message: 'Saved to "' + body.tab + '".' });
   } catch (err) {
     return jsonOut({ ok: false, error: String(err) });
@@ -790,13 +804,27 @@ function scheduledCompileAndSendReport() {
 }
 
 /** Friday 6pm nudge to fill in the status sheet before the 10pm cutoff. */
+/** "Week N (Month)" — N is 1-indexed from that date's day-of-month / 7,
+ * so it resets to Week 1 on its own every month (day 1-7 = Week 1, day
+ * 8-14 = Week 2, ...) with no stored counter to maintain or roll over.
+ * Deliberately NOT the same thing as Weekly Connect's Ticket ID, which
+ * stays a single global-forever counter per the earlier decision on
+ * that — this is purely a display label for the Report Generator's
+ * reminder/report, on a date within the work week it's labeling (the
+ * Friday it's sent on, or a custom range's end date). */
+function weekLabelForDate_(date) {
+  var tz = Session.getScriptTimeZone();
+  var weekNum = Math.ceil(Number(Utilities.formatDate(date, tz, 'd')) / 7);
+  return 'Week ' + weekNum + ' (' + Utilities.formatDate(date, tz, 'MMMM') + ')';
+}
+
 function sendFridayReminder() {
   if (isHoliday(new Date())) {
     Logger.log('Skipping Friday reminder — today is listed in ' + HOLIDAYS_TAB_NAME + '.');
     return;
   }
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var subject = 'Reminder: submit your status update by 10pm tonight';
+  var subject = 'Reminder: submit your status update for ' + weekLabelForDate_(new Date()) + ' (Mon-Fri) by 10pm tonight';
   var body =
     'Hi team,\n\n' +
     'Friendly reminder to log your status update for the week before 10pm tonight.\n' +
@@ -882,6 +910,15 @@ function formatRangeLabel(range) {
     Utilities.formatDate(range.end, tz, 'MMM d, yyyy');
 }
 
+// Only meaningful for the default Mon-Fri work week the Friday trigger
+// sends — a custom range picked from the app (a whole month, a quarter,
+// a year) isn't "a week" at all, so this only prefixes the subject when
+// the range actually looks like one (5 days or fewer, matching Mon-Fri).
+function isWorkWeekRange_(range) {
+  var days = Math.round((range.end - range.start) / (24 * 60 * 60 * 1000));
+  return days >= 0 && days <= 6;
+}
+
 /**
  * Emails the report for `range` (defaults to the current Mon-Fri work week —
  * this is what the Friday 11pm trigger calls with no argument) to
@@ -891,7 +928,9 @@ function compileAndSendReport(range) {
   range = range || getCurrentWeekRange();
   var built = buildReportBlob(range);
 
-  var subject = 'Status Report — ' + formatRangeLabel(range);
+  var subject = 'Status Report — ' +
+    (isWorkWeekRange_(range) ? weekLabelForDate_(range.end) + ' — ' : '') +
+    formatRangeLabel(range);
   var sheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
 
   getReportRecipients().forEach(function (addr) {
@@ -1532,13 +1571,6 @@ function getCurrentConnectWeekRange() {
   return { start: weekStart, end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59, 59) };
 }
 
-// Script Property holding the comma-separated list of group names still
-// waiting on a Teams post — see scheduleWeeklyConnectTeamsPost_() below.
-// '__legacy__' stands in for "blank Group" (a ticket saved before Group
-// existed, or no groups configured at all), so it round-trips safely
-// through the same comma-list helper every other list property uses.
-var PENDING_TEAMS_GROUPS_PROP = 'PENDING_WEEKLY_CONNECT_TEAMS_GROUPS';
-
 /** Wraps `text` (already the same lightweight-Markdown shape richtext
  * fields produce — bold markers, bullet lines, [link](url) — which
  * Adaptive Cards' TextBlock understands a limited version of natively)
@@ -1564,88 +1596,34 @@ function buildAdaptiveCardPayload_(text) {
   };
 }
 
-/** Queues `groupName` for a Teams post and schedules a one-time trigger to
- * actually send it, instead of calling postWeeklyConnectToTeams() right
- * here — UrlFetchApp.fetch() is a blocking call with no true async/
- * fire-and-forget option in Apps Script, so posting directly from doPost
- * would make the save itself wait on however long Teams (or a Power
- * Automate flow behind the webhook) takes to respond, which can be
- * several seconds. This returns almost instantly; the real post happens
- * moments later in a separate execution, well after doPost's response has
- * already gone out. Never throws — a failure here (e.g. hitting the
- * per-project trigger quota under a burst of submissions) should never
- * turn a successful save into an error. */
-function scheduleWeeklyConnectTeamsPost_(groupName) {
-  try {
-    var props = PropertiesService.getScriptProperties();
-    var pending = getScriptPropList_(PENDING_TEAMS_GROUPS_PROP);
-    var key = groupName || '__legacy__';
-    if (pending.indexOf(key) === -1) {
-      pending.push(key);
-      props.setProperty(PENDING_TEAMS_GROUPS_PROP, pending.join(','));
-    }
-    ScriptApp.newTrigger('runScheduledWeeklyConnectTeamsPosts_')
-      .timeBased()
-      .after(1000)
-      .create();
-  } catch (err) {
-    Logger.log('scheduleWeeklyConnectTeamsPost_ failed: ' + err);
-  }
-}
-
-/** Fired by the one-time trigger scheduleWeeklyConnectTeamsPost_() creates
- * — reads whatever groups piled up since the last run (usually just one),
- * posts each to Teams, and clears the queue. A quick back-to-back burst
- * of submissions can schedule more than one of these triggers before the
- * first fires; the extras find an already-empty queue and just no-op, so
- * this also sweeps up any of ITS OWN leftover triggers each time it runs,
- * rather than letting them pile up toward the per-project trigger quota. */
-function runScheduledWeeklyConnectTeamsPosts_() {
-  var props = PropertiesService.getScriptProperties();
-  var pending = getScriptPropList_(PENDING_TEAMS_GROUPS_PROP);
-  props.deleteProperty(PENDING_TEAMS_GROUPS_PROP);
-  // Each group posted independently, wrapped here (not just inside
-  // postWeeklyConnectToTeams()'s own narrower try/catch around the actual
-  // fetch) — an error anywhere in ONE group's post (a bad date, a sheet
-  // read failure, anything) used to propagate straight out of this
-  // forEach and skip every group after it, AND skip the trigger-cleanup
-  // step below entirely, since both come after the throw.
-  pending.forEach(function (key) {
-    try {
-      postWeeklyConnectToTeams(key === '__legacy__' ? '' : key);
-    } catch (err) {
-      Logger.log('runScheduledWeeklyConnectTeamsPosts_ failed for group "' + key + '": ' + err);
-    }
-  });
-
-  ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'runScheduledWeeklyConnectTeamsPosts_') {
-      ScriptApp.deleteTrigger(t);
-    }
-  });
-}
 
 /** Posts (as a fresh message — see the comment on CONNECT_GROUPS_TAB_NAME/
  * the Weekly Connect plan for why this isn't a truly edited single
- * message) every `groupName` ticket raised in the current connect week, to
- * THAT group's own webhook — not a single shared one, since one Weekly
- * Connect can serve more than one recurring meeting/channel. Silently
- * no-ops if `groupName` isn't blank but has no matching _ConnectGroups
- * webhook, or falls back to the legacy single getTeamsWebhookUrl() if
- * `groupName` itself is blank (a ticket saved before Group existed, or
- * with no groups configured at all yet) — either way, Weekly Connect
- * works fine without Teams, same as the Friday reminder does. Never
- * throws: a bad Teams call should never surface as an error somewhere
- * downstream (see scheduleWeeklyConnectTeamsPost_() above for how this
- * gets called — always from its own separate execution by now, never
- * inline with a save). */
-function postWeeklyConnectToTeams(groupName) {
+ * message) every `groupName` ticket raised within `range`, to THAT
+ * group's own webhook — not a single shared one, since one Weekly Connect
+ * can serve more than one recurring meeting/channel. `range` defaults to
+ * getCurrentConnectWeekRange() (Wednesday-anchored) only as a fallback for
+ * anywhere this gets called with no explicit range at all — the normal
+ * path is the widget's own "Post to Teams" button, which always sends a
+ * real range the person picked themselves (their actual discussion date
+ * moves around, not fixed to any one weekday — see the doPost action
+ * below). Silently no-ops if `groupName` isn't blank but has no matching
+ * _ConnectGroups webhook, or falls back to the legacy single
+ * getTeamsWebhookUrl() if `groupName` itself is blank (a ticket saved
+ * before Group existed, or with no groups configured at all yet) —
+ * either way, Weekly Connect works fine without Teams, same as the
+ * Friday reminder does. Never throws: returns {ok, message} either way,
+ * for the caller to relay straight back to whoever clicked the button. */
+function postWeeklyConnectToTeams(groupName, range) {
   var teamsWebhookUrl = groupName ? getConnectGroupWebhookUrl(groupName) : getTeamsWebhookUrl();
-  if (!teamsWebhookUrl) return;
+  var heading = groupName || 'Weekly Connect';
+  if (!teamsWebhookUrl) {
+    return { ok: false, message: 'No Teams webhook configured for "' + heading + '".' };
+  }
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(WEEKLY_CONNECT_TAB_NAME);
-  if (!sheet) return;
+  if (!sheet) return { ok: false, message: 'Weekly Connect tab not found.' };
 
-  var range = getCurrentConnectWeekRange();
+  range = range || getCurrentConnectWeekRange();
   var tickets = getWeeklyConnectTickets().filter(function (t) {
     if (groupName && (t['Group'] || '') !== groupName) return false;
     // 'T00:00:00' (no zone suffix) forces local-time parsing — a bare
@@ -1655,19 +1633,18 @@ function postWeeklyConnectToTeams(groupName) {
     var d = new Date(t['Date'] + 'T00:00:00');
     return !isNaN(d.getTime()) && d >= range.start && d <= range.end;
   });
-  // Oldest first within the week, so the list reads top-to-bottom in the
+  // Oldest first within the range, so the list reads top-to-bottom in the
   // order tickets actually came in.
   tickets.reverse();
 
   var tz = Session.getScriptTimeZone();
-  var weekLabel = Utilities.formatDate(range.start, tz, 'MMM d') + ' – ' + Utilities.formatDate(range.end, tz, 'MMM d');
+  var rangeLabel = Utilities.formatDate(range.start, tz, 'MMM d') + ' – ' + Utilities.formatDate(range.end, tz, 'MMM d');
   var lines = tickets.map(function (t) {
     var who = t['Requester'] ? ' — ' + t['Requester'] : '';
     return '**Q' + t['Ticket ID'] + '**: ' + (t['Issue'] || '(no description)') + who;
   });
-  var heading = groupName || 'Weekly Connect';
-  var text = '**' + heading + ' — week of ' + weekLabel + '**\n\n' +
-    (lines.length ? lines.join('\n\n') : '_Nothing logged yet this week._');
+  var text = '**' + heading + ' — ' + rangeLabel + '**\n\n' +
+    (lines.length ? lines.join('\n\n') : '_Nothing logged in this range._');
 
   try {
     var response = UrlFetchApp.fetch(teamsWebhookUrl, {
@@ -1677,21 +1654,23 @@ function postWeeklyConnectToTeams(groupName) {
       muteHttpExceptions: true, // so a non-2xx response lands here to inspect, instead of throwing
     });
     var statusCode = response.getResponseCode();
+    var succeeded = statusCode >= 200 && statusCode < 300;
     // muteHttpExceptions means a wrong payload shape (e.g. a Power Automate
     // flow expecting different field names than the plain {text: ...} this
     // sends) fails SILENTLY otherwise — no exception, nothing in the
-    // widget, nothing anywhere the ticket got saved successfully. Writing
-    // the outcome to _Config makes it checkable directly in the Sheet,
-    // without needing to open Apps Script's Executions log.
-    setConfigValue(
-      'LastTeamsPostStatus',
-      (statusCode >= 200 && statusCode < 300 ? 'OK' : 'FAILED') + ' (' + statusCode + ') — ' +
-        heading + ' — ' + new Date().toISOString() +
-        (statusCode >= 200 && statusCode < 300 ? '' : ' — response: ' + response.getContentText().slice(0, 300))
-    );
+    // widget. Still written to _Config too (not just returned), so it's
+    // checkable directly in the Sheet without needing this exact click's
+    // response, or Apps Script's Executions log.
+    var statusMsg = (succeeded ? 'OK' : 'FAILED') + ' (' + statusCode + ') — ' + heading + ' — ' + new Date().toISOString() +
+      (succeeded ? '' : ' — response: ' + response.getContentText().slice(0, 300));
+    setConfigValue('LastTeamsPostStatus', statusMsg);
+    return succeeded
+      ? { ok: true, message: 'Posted ' + tickets.length + ' ticket(s) to "' + heading + '".' }
+      : { ok: false, message: 'Teams rejected the post (HTTP ' + statusCode + ') — check LastTeamsPostStatus in _Config for details.' };
   } catch (err) {
     setConfigValue('LastTeamsPostStatus', 'ERROR — ' + heading + ' — ' + new Date().toISOString() + ' — ' + err);
     Logger.log('postWeeklyConnectToTeams failed: ' + err);
+    return { ok: false, message: 'Could not reach Teams: ' + err };
   }
 }
 

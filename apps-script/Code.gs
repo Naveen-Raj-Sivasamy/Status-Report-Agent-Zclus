@@ -440,6 +440,110 @@ function doPost(e) {
       return jsonOut({ ok: true, message: 'Connect groups saved.' });
     }
 
+    /** Per-person accounts — see the _Users/_Sessions section above for
+     * why these exist and why they're not enforced on any other action
+     * yet. bootstrapFirstAdmin only ever succeeds once, the very first
+     * time it's called against a backend with no accounts at all; every
+     * account after that comes from an existing admin's createUser. */
+    if (body.action === 'bootstrapFirstAdmin') {
+      return jsonOut(bootstrapFirstAdmin_(body.username, body.password));
+    }
+    if (body.action === 'login') {
+      return jsonOut(loginUser_(body.username, body.password));
+    }
+    if (body.action === 'listUsers') {
+      var listAuth = requireAdminSession_(body);
+      if (listAuth.error) return jsonOut({ ok: false, error: listAuth.error });
+      return jsonOut({ ok: true, users: listUsersPublic_() });
+    }
+    if (body.action === 'createUser') {
+      var createAuth = requireAdminSession_(body);
+      if (createAuth.error) return jsonOut({ ok: false, error: createAuth.error });
+      if (!body.username || !body.password) {
+        return jsonOut({ ok: false, error: 'Username and password are required.' });
+      }
+      var createLock = LockService.getScriptLock();
+      if (!createLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        var createData = usersSheetRows_();
+        if (findUserRowIndex_(createData.headers, createData.rows, body.username) !== -1) {
+          return jsonOut({ ok: false, error: 'That username is already taken.' });
+        }
+        var newSalt = Utilities.getUuid();
+        createData.sheet.appendRow([
+          String(body.username).trim(),
+          hashPassword_(body.password, newSalt),
+          newSalt,
+          body.role === 'Admin' ? 'Admin' : 'User',
+          'TRUE',
+          new Date(),
+          '',
+        ]);
+      } finally {
+        createLock.releaseLock();
+      }
+      return jsonOut({ ok: true, message: 'Account created.' });
+    }
+    if (body.action === 'resetUserPassword') {
+      var resetAuth = requireAdminSession_(body);
+      if (resetAuth.error) return jsonOut({ ok: false, error: resetAuth.error });
+      if (!body.username || !body.newPassword) {
+        return jsonOut({ ok: false, error: 'Username and new password are required.' });
+      }
+      var resetLock = LockService.getScriptLock();
+      if (!resetLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        var resetData = usersSheetRows_();
+        var resetIdx = findUserRowIndex_(resetData.headers, resetData.rows, body.username);
+        if (resetIdx === -1) return jsonOut({ ok: false, error: 'No such account: ' + body.username });
+        var resetSalt = Utilities.getUuid();
+        var hashCol = findColumnIndex(resetData.headers, 'PasswordHash');
+        var saltCol = findColumnIndex(resetData.headers, 'Salt');
+        resetData.sheet.getRange(resetIdx + 2, hashCol + 1).setValue(hashPassword_(body.newPassword, resetSalt));
+        resetData.sheet.getRange(resetIdx + 2, saltCol + 1).setValue(resetSalt);
+      } finally {
+        resetLock.releaseLock();
+      }
+      return jsonOut({ ok: true, message: 'Password reset.' });
+    }
+    if (body.action === 'setUserActive') {
+      var activeAuth = requireAdminSession_(body);
+      if (activeAuth.error) return jsonOut({ ok: false, error: activeAuth.error });
+      if (!body.username) return jsonOut({ ok: false, error: 'Missing "username".' });
+      var activeLock = LockService.getScriptLock();
+      if (!activeLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        var activeData = usersSheetRows_();
+        var activeIdx = findUserRowIndex_(activeData.headers, activeData.rows, body.username);
+        if (activeIdx === -1) return jsonOut({ ok: false, error: 'No such account: ' + body.username });
+        var targetRec = rowToUserRecord_(activeData.headers, activeData.rows[activeIdx]);
+        // Refuse to deactivate the last remaining active admin — the one
+        // way this app could otherwise permanently lock everyone out of
+        // user management, with no other admin left to undo it.
+        if (!body.active && targetRec['Role'] === 'Admin') {
+          var otherActiveAdmins = activeData.rows.filter(function (row, i) {
+            if (i === activeIdx) return false;
+            var r = rowToUserRecord_(activeData.headers, row);
+            return r['Role'] === 'Admin' && isActiveValue_(r['Active']);
+          }).length;
+          if (otherActiveAdmins === 0) {
+            return jsonOut({ ok: false, error: 'Can\'t deactivate the only remaining admin account.' });
+          }
+        }
+        var activeCol = findColumnIndex(activeData.headers, 'Active');
+        activeData.sheet.getRange(activeIdx + 2, activeCol + 1).setValue(body.active ? 'TRUE' : 'FALSE');
+      } finally {
+        activeLock.releaseLock();
+      }
+      return jsonOut({ ok: true, message: body.active ? 'Account reactivated.' : 'Account deactivated.' });
+    }
+
     /** Called by the build-release CI workflow right after it publishes a
      * new installer, so the widget's "update available" banner and its
      * DownloadUrl-driven "Get it" button stay in sync automatically. */
@@ -1101,6 +1205,194 @@ function syncConnectGroupOptions_(groups) {
 function getConnectGroupWebhookUrl(groupName) {
   var match = getConnectGroups().filter(function (g) { return g.name === groupName; })[0];
   return match ? match.webhookUrl : '';
+}
+
+// -------------------- per-person accounts (_Users / _Sessions) --------------------
+//
+// Sprint 1 of "restrict who can use this": right now every write only
+// checks the one shared SHARED_SECRET baked into every installer — there's
+// no concept server-side of WHO is submitting, and the client-side "admin
+// password" gating Manage Fields & Options (see saveOptions/saveFieldSchema/
+// saveCategories above) is checked ONLY on the widget, never re-checked
+// here — a request with a valid SHARED_SECRET can call those actions
+// directly with no admin password at all.
+//
+// This section adds real accounts, stored the same way as everything else
+// in this project: a Sheet tab, admin-editable, self-creating. It's
+// deliberately NOT wired into saveOptions/saveFieldSchema/saveCategories/
+// saveConnectGroups or the regular submit-a-report actions yet — those
+// still work exactly as before. Flipping them to require a valid session
+// is a follow-up step, once the widget itself has a login screen to get
+// that session from; adding the requirement here first would just lock
+// everyone out with no way back in.
+var USERS_TAB_NAME = '_Users';
+var USERS_COLUMNS = ['Username', 'PasswordHash', 'Salt', 'Role', 'Active', 'CreatedAt', 'LastLoginAt'];
+var SESSIONS_TAB_NAME = '_Sessions';
+var SESSIONS_COLUMNS = ['SessionToken', 'Username', 'CreatedAt'];
+
+function ensureUsersTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(USERS_TAB_NAME)) return;
+  var sheet = ss.insertSheet(USERS_TAB_NAME);
+  sheet.getRange(1, 1, 1, USERS_COLUMNS.length).setValues([USERS_COLUMNS]);
+  // No seed row — there's no credential to invent. The very first account
+  // is created by bootstrapFirstAdmin below, which only works while this
+  // tab has zero data rows, then refuses forever after.
+}
+
+function ensureSessionsTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(SESSIONS_TAB_NAME)) return;
+  var sheet = ss.insertSheet(SESSIONS_TAB_NAME);
+  sheet.getRange(1, 1, 1, SESSIONS_COLUMNS.length).setValues([SESSIONS_COLUMNS]);
+}
+
+// SHA-256(salt + password), base64 — Apps Script has no bcrypt/scrypt, this
+// is what Utilities.computeDigest offers. Salted and per-user, which is
+// what actually matters against the realistic threat here (an internal
+// tool's Sheet backend, not a bank); a from-scratch bcrypt port would add
+// real complexity for a threat model this doesn't face.
+function hashPassword_(password, salt) {
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + password, Utilities.Charset.UTF_8);
+  return Utilities.base64Encode(digest);
+}
+
+function usersSheetRows_() {
+  ensureUsersTab();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(USERS_TAB_NAME);
+  var headers = getHeaderRow(sheet);
+  var lastRow = sheet.getLastRow();
+  var rows = lastRow <= 1 ? [] : sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  return { sheet: sheet, headers: headers, rows: rows };
+}
+
+// Username lookup is case-insensitive (so "Naveen" and "naveen" are the
+// same account — the honest expectation for a login field) but the
+// original casing someone registered with is what's stored and shown.
+function findUserRowIndex_(headers, rows, username) {
+  var col = findColumnIndex(headers, 'Username');
+  var needle = String(username || '').trim().toLowerCase();
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i][col]).trim().toLowerCase() === needle) return i;
+  }
+  return -1;
+}
+
+function rowToUserRecord_(headers, row) {
+  var rec = {};
+  headers.forEach(function (h, i) { rec[h] = row[i]; });
+  return rec;
+}
+
+function isActiveValue_(v) {
+  return String(v).trim().toUpperCase() === 'TRUE';
+}
+
+/** Only succeeds while _Users is completely empty — creates the very
+ * first account (always Admin) and logs it straight in, so whoever sets
+ * up a fresh backend doesn't need a separate "now go log in" step. Once
+ * one account exists, this refuses forever — the normal path from there
+ * is an existing admin using createUser. */
+function bootstrapFirstAdmin_(username, password) {
+  if (!username || !password) return { ok: false, error: 'Username and password are required.' };
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(LOCK_WAIT_MS)) {
+    return { ok: false, error: 'Server is busy — please try again in a few seconds.' };
+  }
+  try {
+    var data = usersSheetRows_();
+    if (data.rows.length > 0) {
+      return { ok: false, error: 'An admin account already exists — use the normal login instead.' };
+    }
+    var salt = Utilities.getUuid();
+    data.sheet.appendRow([
+      String(username).trim(),
+      hashPassword_(password, salt),
+      salt,
+      'Admin',
+      'TRUE',
+      new Date(),
+      '',
+    ]);
+  } finally {
+    lock.releaseLock();
+  }
+  return loginUser_(username, password);
+}
+
+function loginUser_(username, password) {
+  var data = usersSheetRows_();
+  var idx = findUserRowIndex_(data.headers, data.rows, username);
+  if (idx === -1) return { ok: false, error: 'Invalid username or password.' };
+  var rec = rowToUserRecord_(data.headers, data.rows[idx]);
+  if (!isActiveValue_(rec['Active'])) {
+    return { ok: false, error: 'This account has been deactivated — contact your admin.' };
+  }
+  if (hashPassword_(password, rec['Salt']) !== rec['PasswordHash']) {
+    return { ok: false, error: 'Invalid username or password.' };
+  }
+  var token = Utilities.getUuid();
+  ensureSessionsTab();
+  var sessSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSIONS_TAB_NAME);
+  sessSheet.appendRow([token, rec['Username'], new Date()]);
+  var lastLoginCol = findColumnIndex(data.headers, 'LastLoginAt');
+  if (lastLoginCol !== -1) data.sheet.getRange(idx + 2, lastLoginCol + 1).setValue(new Date());
+  return { ok: true, sessionToken: token, username: rec['Username'], role: rec['Role'] };
+}
+
+/** {username, role} for a valid, still-active session, or null — null
+ * covers "no such token", "token belongs to a deactivated account", and
+ * "no token sent" all the same way (the caller doesn't need to tell them
+ * apart, just refuse). Not yet called from the general write path (see
+ * the section comment above) — only from the admin-only user-management
+ * actions below, until the widget itself sends a session on every call. */
+function validateSession_(token) {
+  if (!token) return null;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sessSheet = ss.getSheetByName(SESSIONS_TAB_NAME);
+  if (!sessSheet) return null;
+  var lastRow = sessSheet.getLastRow();
+  if (lastRow <= 1) return null;
+  var sessRows = sessSheet.getRange(2, 1, lastRow - 1, SESSIONS_COLUMNS.length).getValues();
+  var username = null;
+  for (var i = 0; i < sessRows.length; i++) {
+    if (sessRows[i][0] === token) { username = sessRows[i][1]; break; }
+  }
+  if (!username) return null;
+  var data = usersSheetRows_();
+  var idx = findUserRowIndex_(data.headers, data.rows, username);
+  if (idx === -1) return null;
+  var rec = rowToUserRecord_(data.headers, data.rows[idx]);
+  if (!isActiveValue_(rec['Active'])) return null;
+  return { username: rec['Username'], role: rec['Role'] };
+}
+
+/** Every user-management action below needs this — returns the validated
+ * admin session on success, or a ready-to-return jsonOut() error object
+ * (never both) so callers can just `var s = requireAdminSession_(body); if
+ * (s.error) return jsonOut(s);`. */
+function requireAdminSession_(body) {
+  var session = validateSession_(body.sessionToken);
+  if (!session) return { error: 'Please log in again.' };
+  if (session.role !== 'Admin') return { error: 'Admin access required.' };
+  return { session: session };
+}
+
+/** Every account, minus PasswordHash/Salt — those never leave the server,
+ * same rule getReportSettings/getConnectionConfig etc already follow for
+ * anything sensitive. */
+function listUsersPublic_() {
+  var data = usersSheetRows_();
+  return data.rows.map(function (row) {
+    var rec = rowToUserRecord_(data.headers, row);
+    return {
+      username: rec['Username'],
+      role: rec['Role'],
+      active: isActiveValue_(rec['Active']),
+      createdAt: rec['CreatedAt'],
+      lastLoginAt: rec['LastLoginAt'],
+    };
+  });
 }
 
 /** Every Weekly Connect ticket as a plain object per row, newest first —

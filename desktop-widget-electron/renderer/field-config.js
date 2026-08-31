@@ -1,114 +1,48 @@
-// Per-tab field behavior: which fields get dropdowns, a date picker, or an
-// auto-computed "Week" — everything else falls back to a plain text box.
-// Tab names here must match the actual sheet tab names exactly.
-
-// Every dropdown/multiselect below references an *options key* (a string,
-// e.g. 'SITES' or 'Daily Status.Status') instead of a literal array — the
-// actual list comes from the live _Options sheet tab at runtime (see
-// resolveOptions() below and Code.gs's getOptionsMap()), so adding,
-// removing, or reordering choices is a sheet edit, not a code change.
-// These DEFAULT_OPTIONS are the fallback used if the sheet's copy of a key
-// is missing/empty (including the very first run, before _Options has
-// even been created yet) — the app never breaks over a missing key, it
-// just falls back to what it always shipped with. They also double as the
-// exact starting rows ensureOptionsTab() seeds the sheet with, so editing
-// there means editing real values, not building a list from scratch.
-const DEFAULT_OPTIONS = {
-  SITES: ['MHF', 'FV', 'Peds', 'GI', 'Specialty Pharmacy', 'All'],
-  REQUESTERS: ['Cassandra', 'Tseten', 'Grant', 'Tammy', 'Naveen'],
-  ASSIGNEES: ['Naveen', 'Surya', 'Amulya', 'Cassandra', 'Tseten', 'Grant', 'Tammy', 'Lucy', 'Erika'],
-  // Deliberately its own key, not ASSIGNEES — Leave is scoped to just this
-  // smaller group, while ASSIGNEES (the wider team) still backs "Assigned
-  // to" on every other tab and shouldn't shrink along with this one.
-  LEAVE_NAMES: ['Amulya Kumar', 'Suryaraj', 'Naveen Raj'],
-  'Daily Status.Status': ['Done', 'Pending', 'In Progress', 'Open'],
-  'Daily Status.Priority': ['High', 'Medium', 'Low'],
-  'Cleanup_Activities.Volume': ['Large', 'Medium', 'Small'],
-  'Drupal_Bugs_&_Improvements.Type': ['Bug', 'Fix', 'Suggestion'],
-  'Leave.Type': ['Vacation', 'Sick', 'WFH', 'Holiday', 'Other'],
-};
+// Nothing in this file is hardcoded per-organization data any more —
+// every list, every field's widget type, and every category is fetched
+// from the connected sheet at runtime (see index.html's refreshLiveOptions
+// / refreshFieldSchema / refreshCategories and Code.gs's getOptionsMap() /
+// getFieldSchemaMap() / getCategoriesMap()). A brand-new organization that
+// hasn't configured any of _Options / _FieldSchema / _Categories yet still
+// gets a fully working app: every field just falls back to a plain text
+// box, and the tab list shows flat with no grouping screen at all — see
+// the fallbacks below and in buildFieldInput() (index.html).
 
 // `liveOptions` is whatever came back from GET ?action=options (a plain
-// object of key -> array), fetched once at launch — see index.html. Falls
-// back to DEFAULT_OPTIONS per-key, not all-or-nothing, so a sheet that
-// only defines some lists still gets the rest from the shipped defaults.
+// object of key -> array), fetched once at launch — see index.html.
+// Returns [] for a key the sheet doesn't define, rather than a shipped
+// default — there's no "correct" default site list, requester list, etc.
+// for an organization we know nothing about.
 function resolveOptions(key, liveOptions) {
   const fromSheet = liveOptions && liveOptions[key];
-  return fromSheet && fromSheet.length ? fromSheet : DEFAULT_OPTIONS[key] || [];
+  return fromSheet && fromSheet.length ? fromSheet : [];
 }
-
-// Top-level menu the widget shows before the tab list — started life as
-// just "log a status update", now covers more than one kind of thing, so
-// tabs group under whichever menu they conceptually belong to instead of
-// one long flat list. A tab that shows up from the sheet but isn't listed
-// under any of these still appears — see groupTabsIntoCategories() below —
-// bucketed into an auto-created "More" menu, so a newly added tab is
-// never silently unreachable, just uncategorized until it's added here.
-const CATEGORIES = {
-  'Report Generator': ['Daily Status', 'Adhoc_Mails', 'Cleanup_Activities', 'Drupal_Bugs_&_Improvements'],
-  'Team Management': ['Leave'],
-};
-
-const FIELD_CONFIG = {
-  'Daily Status': {
-    Site: { type: 'select', optionsKey: 'SITES' },
-    Date: { type: 'date' },
-    Week: { type: 'week-auto', basedOn: 'Date' },
-    Status: { type: 'select', optionsKey: 'Daily Status.Status' },
-    Priority: { type: 'select', optionsKey: 'Daily Status.Priority' },
-    'Assigned to': { type: 'multiselect', optionsKey: 'ASSIGNEES' },
-  },
-  Adhoc_Mails: {
-    Requester: { type: 'select', optionsKey: 'REQUESTERS' },
-    Site: { type: 'select', optionsKey: 'SITES' },
-    Date: { type: 'date' },
-    Week: { type: 'week-auto', basedOn: 'Date' },
-    'Assigned to': { type: 'multiselect', optionsKey: 'ASSIGNEES' },
-  },
-  Cleanup_Activities: {
-    'Cleanup Number': { type: 'sequence' },
-    Volume: { type: 'select', optionsKey: 'Cleanup_Activities.Volume' },
-    Requester: { type: 'select', optionsKey: 'REQUESTERS' },
-    'Site Impacted': { type: 'select', optionsKey: 'SITES' },
-    Date: { type: 'date' },
-    Week: { type: 'week-auto', basedOn: 'Date' },
-    'Assigned to': { type: 'multiselect', optionsKey: 'ASSIGNEES' },
-  },
-  'Drupal_Bugs_&_Improvements': {
-    Website: { type: 'select', optionsKey: 'SITES' },
-    Date: { type: 'date' },
-    Week: { type: 'week-auto', basedOn: 'Date' },
-    Type: { type: 'select', optionsKey: 'Drupal_Bugs_&_Improvements.Type' },
-    'Assigned to': { type: 'multiselect', optionsKey: 'ASSIGNEES' },
-  },
-  // Auto-created server-side (see ensureLeaveTab() in Code.gs) the first
-  // time the widget asks for the tab list — this config just makes that
-  // tab's form as polished as the rest instead of falling back to plain
-  // text boxes for every field. One person per leave entry, so a plain
-  // `select` (not `multiselect` like "Assigned to" elsewhere) fits better.
-  Leave: {
-    Name: { type: 'select', optionsKey: 'LEAVE_NAMES' },
-    Date: { type: 'date' },
-    Week: { type: 'week-auto', basedOn: 'Date' },
-    Type: { type: 'select', optionsKey: 'Leave.Type' },
-  },
-};
 
 function normalizeKey(s) {
   return String(s).trim().toLowerCase();
 }
 
-// Buckets the live list of sheet tabs into CATEGORIES, in CATEGORIES'
-// own order, skipping a category entirely if none of its tabs currently
-// exist (e.g. Leave got renamed). Anything left over — present on the
-// sheet but not listed under any category — lands in a "More" bucket
-// appended at the end, shown only if it's non-empty, so a brand-new tab
-// is discoverable instead of just vanishing from the widget.
-function groupTabsIntoCategories(tabs) {
+// Buckets the live list of sheet tabs into whatever categories the
+// connected sheet's _Categories tab defines, in that tab's own row order,
+// skipping a category entirely if none of its tabs currently exist (e.g. a
+// tab got renamed). Anything left over — present on the sheet but not
+// listed under any category — lands in a "More" bucket appended at the
+// end, so a brand-new tab is discoverable instead of just vanishing.
+//
+// If liveCategories is empty (nothing configured at all — the default for
+// a brand-new organization), returns [] on purpose: that's the signal
+// index.html uses to skip the category-picker screen entirely and show a
+// flat tab list instead, exactly like the app behaved before categories
+// existed. A "More" bucket only ever appears alongside *some* real
+// configured category, never as the sole group.
+function groupTabsIntoCategories(tabs, liveCategories) {
+  const categoryNames = Object.keys(liveCategories || {});
+  if (categoryNames.length === 0) return [];
+
   const used = new Set();
-  const groups = Object.keys(CATEGORIES)
+  const groups = categoryNames
     .map((name) => {
-      const members = CATEGORIES[name].filter((t) => tabs.indexOf(t) !== -1);
+      const members = liveCategories[name].filter((t) => tabs.indexOf(t) !== -1);
       members.forEach((t) => used.add(t));
       return { name: name, tabs: members };
     })
@@ -120,9 +54,14 @@ function groupTabsIntoCategories(tabs) {
 
 // Matches column names case-insensitively (and ignoring stray whitespace),
 // since the sheet's actual header casing ("Assigned To" vs "Assigned to")
-// won't always match this config exactly.
-function fieldSpecFor(tab, column) {
-  const tabConfig = FIELD_CONFIG[tab];
+// won't always match the _FieldSchema tab's Column value exactly.
+// fieldSchema is whatever GET ?action=fieldSchema returned: { Tab: { Column:
+// {type, optionsKey, basedOn} } }. A tab/column not present there simply
+// has no spec — buildFieldInput() (index.html) falls back to a plain text
+// box in that case, which is the correct behavior for an org that hasn't
+// configured that field yet.
+function fieldSpecFor(tab, column, fieldSchema) {
+  const tabConfig = fieldSchema && fieldSchema[tab];
   if (!tabConfig) return null;
   const target = normalizeKey(column);
   const matchKey = Object.keys(tabConfig).find((k) => normalizeKey(k) === target);

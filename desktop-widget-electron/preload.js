@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('statusApp', {
   getTabs: () => ipcRenderer.invoke('get-tabs'),
   getColumns: (tab) => ipcRenderer.invoke('get-columns', tab),
   getOptions: () => ipcRenderer.invoke('get-options'),
+  getFieldSchema: () => ipcRenderer.invoke('get-field-schema'),
+  getCategories: () => ipcRenderer.invoke('get-categories'),
   submitEntry: (tab, values) => ipcRenderer.invoke('submit-entry', { tab, values }),
   sendReportNow: (range) => ipcRenderer.invoke('send-report-now', range),
   downloadReport: (range) => ipcRenderer.invoke('download-report', range),

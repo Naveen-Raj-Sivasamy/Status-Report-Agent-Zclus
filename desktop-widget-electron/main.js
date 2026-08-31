@@ -223,6 +223,8 @@ async function apiPost(tab, values, opts) {
 let tabsCache = null;
 let columnsCache = {}; // tab -> columns[]
 let optionsCache = null; // dropdown/multiselect option lists from the _Options tab
+let fieldSchemaCache = null; // which fields get which widget type, from the _FieldSchema tab
+let categoriesCache = null; // landing-screen tab grouping, from the _Categories tab
 
 async function refreshTabsCache() {
   try {
@@ -257,6 +259,28 @@ async function refreshOptionsCache() {
   }
 }
 
+async function refreshFieldSchemaCache() {
+  try {
+    const data = await apiGet({ action: 'fieldSchema' });
+    fieldSchemaCache = data;
+    return data;
+  } catch (err) {
+    if (fieldSchemaCache) return fieldSchemaCache; // stale is better than nothing
+    throw err;
+  }
+}
+
+async function refreshCategoriesCache() {
+  try {
+    const data = await apiGet({ action: 'categories' });
+    categoriesCache = data;
+    return data;
+  } catch (err) {
+    if (categoriesCache) return categoriesCache; // stale is better than nothing
+    throw err;
+  }
+}
+
 function prefetchAll() {
   refreshTabsCache()
     .then((data) => Promise.all((data.tabs || []).map((t) => refreshColumnsCache(t))))
@@ -265,6 +289,12 @@ function prefetchAll() {
     });
   refreshOptionsCache().catch(() => {
     /* same — a real request will retry when a form actually needs it */
+  });
+  refreshFieldSchemaCache().catch(() => {
+    /* same */
+  });
+  refreshCategoriesCache().catch(() => {
+    /* same */
   });
 }
 
@@ -288,6 +318,20 @@ ipcMain.handle('get-options', async () => {
     return optionsCache;
   }
   return refreshOptionsCache();
+});
+ipcMain.handle('get-field-schema', async () => {
+  if (fieldSchemaCache) {
+    refreshFieldSchemaCache();
+    return fieldSchemaCache;
+  }
+  return refreshFieldSchemaCache();
+});
+ipcMain.handle('get-categories', async () => {
+  if (categoriesCache) {
+    refreshCategoriesCache();
+    return categoriesCache;
+  }
+  return refreshCategoriesCache();
 });
 ipcMain.handle('submit-entry', async (event, { tab, values }) => {
   const result = await apiPost(tab, values, {
@@ -315,6 +359,8 @@ ipcMain.handle('clear-cache', async () => {
   tabsCache = null;
   columnsCache = {};
   optionsCache = null;
+  fieldSchemaCache = null;
+  categoriesCache = null;
   return result;
 });
 ipcMain.handle('download-report', async (_e, range) => {

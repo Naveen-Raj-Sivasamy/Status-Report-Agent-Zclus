@@ -35,6 +35,18 @@
  * ever pulls from REPORT_TABS below; add a tab's name there yourself if
  * you want it folded into the report as well.
  *
+ * Which fields get a dropdown/date-picker/multiselect/etc. — and each
+ * dropdown's actual choices — are NOT hardcoded in the widget either:
+ * _FieldSchema and _Options (both auto-created, see ensureFieldSchemaTab()
+ * / ensureOptionsTab()) drive both. A (Tab, Column) with no _FieldSchema
+ * row just falls back to a plain text box, same as always — nothing
+ * breaks if you never touch either tab.
+ *
+ * Which category each tab is grouped under on the landing screen is the
+ * same story: _Categories (auto-created, see ensureCategoriesTab()) drives
+ * it, and an org that never adds a row there just gets one flat tab list —
+ * no category picker screen at all.
+ *
  * REQUIRED ONE-TIME SETUP: SHARED_SECRET and the recipient lists are NOT
  * hardcoded in this file (this repo is public — a committed secret/PII
  * would be readable by anyone). Run setupScriptProperties() once from the
@@ -169,6 +181,19 @@ function doGet(e) {
      * redeploy for every tweak. */
     if (action === 'options') {
       return jsonOut({ ok: true, options: cached('options', getOptionsMap) });
+    }
+    /** Which fields on which tabs get a dropdown/date/multiselect/etc. —
+     * read from _FieldSchema (see ensureFieldSchemaTab()) instead of
+     * being hardcoded in the widget. */
+    if (action === 'fieldSchema') {
+      return jsonOut({ ok: true, fieldSchema: cached('fieldSchema', getFieldSchemaMap) });
+    }
+    /** Which category each tab is grouped under on the landing screen —
+     * read from _Categories (see ensureCategoriesTab()). Empty ({}) for an
+     * org that hasn't configured any, which the widget treats as "show a
+     * flat tab list, skip the category picker entirely". */
+    if (action === 'categories') {
+      return jsonOut({ ok: true, categories: cached('categories', getCategoriesMap) });
     }
     return jsonOut({ ok: true, message: 'Status Report Tracker Agent API is running.' });
   } catch (err) {
@@ -364,7 +389,7 @@ function setupScriptProperties() {
  * to wait out CACHE_SECONDS for the widget to notice. */
 function clearCache() {
   CacheService.getScriptCache().removeAll(
-    listVisibleTabsUncached().map(function (t) { return 'columns:' + t; }).concat(['tabs', 'options'])
+    listVisibleTabsUncached().map(function (t) { return 'columns:' + t; }).concat(['tabs', 'options', 'fieldSchema', 'categories'])
   );
   Logger.log('Cache cleared.');
 }
@@ -654,6 +679,8 @@ function cached(key, computeFn) {
 function listVisibleTabsUncached() {
   ensureLeaveTab();
   ensureOptionsTab();
+  ensureFieldSchemaTab();
+  ensureCategoriesTab();
   return SpreadsheetApp.getActiveSpreadsheet()
     .getSheets()
     .map(function (s) { return s.getName(); })
@@ -798,6 +825,160 @@ function getOptionsMap() {
     if (!list || !option) return;
     if (!map[list]) map[list] = [];
     map[list].push(option);
+  });
+  return map;
+}
+
+// Which form fields get a dropdown/date-picker/multiselect/etc., instead
+// of the plain-text default, per (Tab, Column) — used to live entirely in
+// the widget's own code (FIELD_CONFIG in field-config.js). Now it's a
+// sheet tab like everything else configurable, so a new organization
+// setting this app up from scratch starts with NOTHING hardcoded about
+// what fields exist — every tab just gets plain text boxes until rows are
+// added here, same graceful fallback fieldSpecFor() already had for any
+// (Tab, Column) it didn't recognize.
+var FIELD_SCHEMA_TAB_NAME = '_FieldSchema';
+
+/** Created once, seeded with exactly what FIELD_CONFIG used to hardcode —
+ * this is a MIGRATION for an existing deployment (yours): it moves that
+ * data from code into your sheet without touching any of your other
+ * tabs' actual submitted rows, so the app keeps behaving identically
+ * while the "no hardcoded data" rule now genuinely holds. A brand-new
+ * organization starting from zero just gets an empty tab with headers —
+ * nothing pre-filled for a team whose tabs don't look like yours. */
+function ensureFieldSchemaTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(FIELD_SCHEMA_TAB_NAME)) return;
+  var sheet = ss.insertSheet(FIELD_SCHEMA_TAB_NAME);
+  sheet.getRange(1, 1, 1, 5).setValues([['Tab', 'Column', 'Type', 'OptionsKey', 'BasedOn']]);
+
+  // [Tab, Column, Type, OptionsKey, BasedOn] — only seeded if these exact
+  // tabs already exist in THIS spreadsheet (checked below), so a fresh
+  // org's blank _FieldSchema tab doesn't get rows referencing tabs they
+  // don't have.
+  var migration = [
+    ['Daily Status', 'Site', 'select', 'SITES', ''],
+    ['Daily Status', 'Date', 'date', '', ''],
+    ['Daily Status', 'Week', 'week-auto', '', 'Date'],
+    ['Daily Status', 'Status', 'select', 'Daily Status.Status', ''],
+    ['Daily Status', 'Priority', 'select', 'Daily Status.Priority', ''],
+    ['Daily Status', 'Assigned to', 'multiselect', 'ASSIGNEES', ''],
+    ['Adhoc_Mails', 'Requester', 'select', 'REQUESTERS', ''],
+    ['Adhoc_Mails', 'Site', 'select', 'SITES', ''],
+    ['Adhoc_Mails', 'Date', 'date', '', ''],
+    ['Adhoc_Mails', 'Week', 'week-auto', '', 'Date'],
+    ['Adhoc_Mails', 'Assigned to', 'multiselect', 'ASSIGNEES', ''],
+    ['Cleanup_Activities', 'Cleanup Number', 'sequence', '', ''],
+    ['Cleanup_Activities', 'Volume', 'select', 'Cleanup_Activities.Volume', ''],
+    ['Cleanup_Activities', 'Requester', 'select', 'REQUESTERS', ''],
+    ['Cleanup_Activities', 'Site Impacted', 'select', 'SITES', ''],
+    ['Cleanup_Activities', 'Date', 'date', '', ''],
+    ['Cleanup_Activities', 'Week', 'week-auto', '', 'Date'],
+    ['Cleanup_Activities', 'Assigned to', 'multiselect', 'ASSIGNEES', ''],
+    ['Drupal_Bugs_&_Improvements', 'Website', 'select', 'SITES', ''],
+    ['Drupal_Bugs_&_Improvements', 'Date', 'date', '', ''],
+    ['Drupal_Bugs_&_Improvements', 'Week', 'week-auto', '', 'Date'],
+    ['Drupal_Bugs_&_Improvements', 'Type', 'select', 'Drupal_Bugs_&_Improvements.Type', ''],
+    ['Drupal_Bugs_&_Improvements', 'Assigned to', 'multiselect', 'ASSIGNEES', ''],
+    ['Leave', 'Name', 'select', 'LEAVE_NAMES', ''],
+    ['Leave', 'Date', 'date', '', ''],
+    ['Leave', 'Week', 'week-auto', '', 'Date'],
+    ['Leave', 'Type', 'select', 'Leave.Type', ''],
+  ];
+  var existingTabNames = ss.getSheets().map(function (s) { return s.getName(); });
+  var rows = migration.filter(function (r) { return existingTabNames.indexOf(r[0]) !== -1; });
+  if (rows.length) {
+    sheet.getRange(2, 1, rows.length, 5).setValues(rows);
+  }
+}
+
+/** Groups _FieldSchema's rows into { Tab: { Column: {type, optionsKey,
+ * basedOn} } }, matching the shape the widget's fieldSpecFor() used to
+ * get from the hardcoded FIELD_CONFIG. A row with a blank Tab, Column, or
+ * Type is skipped. */
+function getFieldSchemaMap() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(FIELD_SCHEMA_TAB_NAME);
+  if (!sheet) return {};
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return {};
+
+  var values = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
+  var map = {};
+  values.forEach(function (row) {
+    var tab = String(row[0]).trim();
+    var column = String(row[1]).trim();
+    var type = String(row[2]).trim();
+    if (!tab || !column || !type) return;
+    var optionsKey = String(row[3]).trim();
+    var basedOn = String(row[4]).trim();
+    if (!map[tab]) map[tab] = {};
+    map[tab][column] = { type: type, optionsKey: optionsKey || undefined, basedOn: basedOn || undefined };
+  });
+  return map;
+}
+
+// Which landing-screen category each tab is grouped under (the "Report
+// Generator" / "Team Management" picker) — used to live entirely in the
+// widget's own code (CATEGORIES in field-config.js). Now it's a sheet tab
+// like everything else configurable, so a new organization starts with NO
+// grouping at all: the widget just shows every tab in one flat list until
+// rows are added here. Add, remove, reorder, or retype rows here any time —
+// no code change, no redeploy needed, just wait out CACHE_SECONDS or use
+// Settings -> "Refresh tabs & fields".
+var CATEGORIES_TAB_NAME = '_Categories';
+
+/** Created once, seeded with exactly what CATEGORIES used to hardcode —
+ * this is a MIGRATION for an existing deployment (yours): it moves that
+ * data from code into your sheet without touching any of your other tabs'
+ * actual submitted rows, so the app's landing screen keeps looking
+ * identical while the "no hardcoded data" rule now genuinely holds. A
+ * brand-new organization starting from zero just gets an empty tab with
+ * headers — nothing pre-filled for a team whose tabs don't look like
+ * yours, and the widget falls back to one flat tab list with no category
+ * screen at all when this tab has no rows (see groupTabsIntoCategories()
+ * in field-config.js). */
+function ensureCategoriesTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(CATEGORIES_TAB_NAME)) return;
+  var sheet = ss.insertSheet(CATEGORIES_TAB_NAME);
+  sheet.getRange(1, 1, 1, 2).setValues([['Category', 'Tab']]);
+
+  // [Category, Tab] — only seeded if the tab already exists in THIS
+  // spreadsheet (checked below), so a fresh org's blank _Categories tab
+  // doesn't get rows referencing tabs they don't have.
+  var migration = [
+    ['Report Generator', 'Daily Status'],
+    ['Report Generator', 'Adhoc_Mails'],
+    ['Report Generator', 'Cleanup_Activities'],
+    ['Report Generator', 'Drupal_Bugs_&_Improvements'],
+    ['Team Management', 'Leave'],
+  ];
+  var existingTabNames = ss.getSheets().map(function (s) { return s.getName(); });
+  var rows = migration.filter(function (r) { return existingTabNames.indexOf(r[1]) !== -1; });
+  if (rows.length) {
+    sheet.getRange(2, 1, rows.length, 2).setValues(rows);
+  }
+}
+
+/** Groups _Categories' rows by the "Category" column, in the order they
+ * appear on the sheet (so reordering rows there reorders the landing
+ * screen too). A row with a blank Category or Tab is skipped. Returns {}
+ * (no categories at all) for a brand-new org that hasn't added any rows —
+ * that's the signal the widget uses to skip the category picker entirely. */
+function getCategoriesMap() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CATEGORIES_TAB_NAME);
+  if (!sheet) return {};
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return {};
+
+  var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  var map = {};
+  values.forEach(function (row) {
+    var category = String(row[0]).trim();
+    var tab = String(row[1]).trim();
+    if (!category || !tab) return;
+    if (!map[category]) map[category] = [];
+    map[category].push(tab);
   });
   return map;
 }

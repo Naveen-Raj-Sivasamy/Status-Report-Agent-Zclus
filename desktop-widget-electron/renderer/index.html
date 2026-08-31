@@ -294,10 +294,18 @@
   // once at launch (see the bottom of this file) and re-fetched after
   // Settings -> "Refresh tabs & fields". buildFieldInput() resolves each
   // field's optionsKey against this via resolveOptions() (field-config.js),
-  // which itself falls back to DEFAULT_OPTIONS per-key — so a field just
-  // renders with its shipped defaults until this has actually loaded, or
-  // for any key the sheet doesn't define, rather than rendering empty.
+  // which returns [] for any key the sheet doesn't define yet — there's no
+  // shipped default to fall back to, since every list is org-specific.
   let liveOptions = {};
+  // Which (Tab, Column) fields get a dropdown/date/multiselect/etc., from
+  // the _FieldSchema sheet tab — see fieldSpecFor() (field-config.js). A
+  // (Tab, Column) with no entry here renders as a plain text box.
+  let liveFieldSchema = {};
+  // Landing-screen category grouping, from the _Categories sheet tab — see
+  // groupTabsIntoCategories() (field-config.js). Empty until an org adds
+  // rows there, which is exactly the signal used to skip the category
+  // picker screen and show one flat tab list instead.
+  let liveCategories = {};
 
   // A save that needed a retry used to just sit there saying "Saving..."
   // for up to ~4.5 minutes with zero feedback, which looked identically
@@ -621,6 +629,10 @@
       try {
         await window.statusApp.clearCache();
         refreshLiveOptions(); // also picks up any _Options edits, not just tabs/columns
+        refreshLiveFieldSchema(); // and any _FieldSchema edits
+        // liveCategories isn't refreshed here — it's re-fetched fresh every
+        // time showCategoryPicker() runs, which a "Back" from wherever
+        // onDone below lands will naturally reach.
         showResult({
           success: true,
           title: 'Cache Cleared',
@@ -648,9 +660,12 @@
   // be rewritten to thread the category through by hand.
   let currentCategory = null;
 
-  // The landing screen: one big button per category (see CATEGORIES in
-  // field-config.js) instead of a single flat list of every tab — this
-  // used to be the app's only screen, back when it did one thing.
+  // The landing screen: one big button per category from the _Categories
+  // sheet tab (see groupTabsIntoCategories() in field-config.js), instead
+  // of a single flat list of every tab. An org that hasn't configured any
+  // categories at all gets no cards here — showTabPicker() below renders
+  // the flat list directly instead, same as this app's very first screen
+  // ever, before categories existed.
   async function showCategoryPicker() {
     currentCategory = null;
     els.sub.textContent = 'What would you like to do?';
@@ -658,10 +673,20 @@
     els.reportActions.classList.add('hidden');
     showLoading('Loading…');
     try {
-      const { tabs } = await window.statusApp.getTabs();
-      const groups = groupTabsIntoCategories(tabs);
-      els.main.innerHTML = '';
+      const [{ tabs }, categoriesRes] = await Promise.all([
+        window.statusApp.getTabs(),
+        window.statusApp.getCategories(),
+      ]);
+      liveCategories = (categoriesRes && categoriesRes.categories) || {};
+      const groups = groupTabsIntoCategories(tabs, liveCategories);
 
+      if (groups.length === 0) {
+        // Nothing configured on _Categories — skip this screen entirely.
+        showTabPicker({ name: null, tabs });
+        return;
+      }
+
+      els.main.innerHTML = '';
       groups.forEach((group) => {
         const btn = document.createElement('button');
         btn.className = 'category-btn';
@@ -672,23 +697,27 @@
         els.main.appendChild(btn);
       });
 
-      // Match the tallest "menu" screen (Report Generator's 4-tab
-      // list, ~253px of actual content) so this landing screen — often
-      // just 1-2 category cards — doesn't render visibly smaller.
+      // Match the tallest "menu" screen (~253px of actual content) so
+      // this landing screen — often just 1-2 category cards — doesn't
+      // render visibly smaller.
       els.main.style.minHeight = '255px';
     } catch (err) {
       showError(err.message || String(err), showCategoryPicker);
     }
   }
 
-  // Renders one category's tab list. `group` is only ever a real
-  // {name, tabs} object when called from showCategoryPicker's own click
-  // handler above (an arrow function, so it passes the real value) —
-  // every other call site assigns this function straight to an
-  // `onclick`/`onDone`, which invokes it with the DOM event as the first
-  // argument instead. The typeof/Array.isArray check below is what tells
-  // those apart, so a bare `showTabPicker()` (or `showTabPicker(event)`)
-  // safely falls back to whichever category was already showing.
+  // Renders one category's tab list — or, when `group.name` is `null`
+  // (no _Categories configured at all, see showCategoryPicker above), the
+  // full flat tab list with no "Back" button, since there's no category
+  // screen to go back to. `group` is only ever a real {name, tabs} object
+  // when called from showCategoryPicker's own click handler above (an
+  // arrow function, so it passes the real value) or its own flat-list
+  // fallback call — every other call site assigns this function straight
+  // to an `onclick`/`onDone`, which invokes it with the DOM event as the
+  // first argument instead. The typeof/Array.isArray check below is what
+  // tells those apart, so a bare `showTabPicker()` (or
+  // `showTabPicker(event)`) safely falls back to whichever tab list was
+  // already showing.
   function showTabPicker(group) {
     if (group && typeof group === 'object' && Array.isArray(group.tabs)) {
       currentCategory = group;
@@ -696,7 +725,8 @@
     group = currentCategory;
     if (!group) return showCategoryPicker(); // nothing to go "back" to — land on the real start screen instead
 
-    els.sub.textContent = group.name === 'Report Generator'
+    const isFlat = group.name === null;
+    els.sub.textContent = isFlat
       ? 'What are you logging status for?'
       : `${group.name} — choose an option`;
     els.footer.classList.add('hidden');
@@ -711,27 +741,24 @@
       els.main.appendChild(btn);
     });
 
-    const backBtn = document.createElement('button');
-    backBtn.className = 'secondary';
-    backBtn.style.cssText = 'width:100%; margin-top:2px;';
-    backBtn.textContent = '← Back';
-    backBtn.onclick = showCategoryPicker;
-    els.main.appendChild(backBtn);
-
-    // View Report / Submit Report only make sense for the Report
-    // Generator category — REPORT_TABS (the server side of this) is
-    // scoped to exactly those tabs, so offering "Submit Report" from
-    // Team Management would compile a report that never includes
-    // anything Team Management actually logged.
-    if (group.name === 'Report Generator') {
-      els.reportActions.classList.remove('hidden');
-    } else {
-      els.reportActions.classList.add('hidden');
+    if (!isFlat) {
+      const backBtn = document.createElement('button');
+      backBtn.className = 'secondary';
+      backBtn.style.cssText = 'width:100%; margin-top:2px;';
+      backBtn.textContent = '← Back';
+      backBtn.onclick = showCategoryPicker;
+      els.main.appendChild(backBtn);
     }
+
+    // View Report / Submit Report are available from every tab list —
+    // REPORT_TABS (the server side of this) decides which rows actually
+    // go into the compiled report regardless of which screen you clicked
+    // from, so there's no org-specific category name to match here.
+    els.reportActions.classList.remove('hidden');
   }
 
   function buildFieldInput(tab, col, presetValue) {
-    const spec = (typeof fieldSpecFor === 'function' && fieldSpecFor(tab, col)) || null;
+    const spec = (typeof fieldSpecFor === 'function' && fieldSpecFor(tab, col, liveFieldSchema)) || null;
 
     if (spec && spec.type === 'select') {
       const select = document.createElement('select');
@@ -850,7 +877,7 @@
         );
         return key ? inputs[key] : null;
       };
-      const spec = FIELD_CONFIG[tab] || {};
+      const spec = liveFieldSchema[tab] || {};
       Object.keys(spec).forEach((col) => {
         if (spec[col].type !== 'week-auto') return;
         const dateInput = findInput(spec[col].basedOn);
@@ -949,18 +976,34 @@
     window.statusApp.getOptions().then((res) => {
       liveOptions = (res && res.options) || {};
     }).catch(() => {
-      /* best-effort — resolveOptions() falls back to DEFAULT_OPTIONS regardless */
+      /* best-effort — resolveOptions() returns [] for anything not loaded yet */
+    });
+  }
+
+  // Same fire-and-forget, stale-while-revalidate shape as refreshLiveOptions
+  // above — main.js already caches this in memory, so this is cheap even
+  // when it does hit the network. liveCategories is refreshed separately,
+  // inline in showCategoryPicker() (awaited there, not fire-and-forget),
+  // since it directly decides which screen renders instead of just filling
+  // in a field already on screen.
+  function refreshLiveFieldSchema() {
+    window.statusApp.getFieldSchema().then((res) => {
+      liveFieldSchema = (res && res.fieldSchema) || {};
+    }).catch(() => {
+      /* best-effort — fieldSpecFor() falls back to a plain text box regardless */
     });
   }
 
   window.statusApp.onOpened(async () => {
     yourName = await window.statusApp.getYourName();
     refreshLiveOptions();
+    refreshLiveFieldSchema();
     showCategoryPicker(); // a fresh open always starts at the top, not wherever it was left last time
   });
 
   window.statusApp.getYourName().then((n) => (yourName = n));
   refreshLiveOptions();
+  refreshLiveFieldSchema();
   checkAppVersion();
   showCategoryPicker();
 

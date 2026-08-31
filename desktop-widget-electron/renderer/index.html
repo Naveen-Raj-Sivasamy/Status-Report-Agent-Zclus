@@ -180,6 +180,8 @@
   .field textarea:focus, .field input:focus, .field select:focus {
     outline: 2px solid rgba(255,255,255,0.6); outline-offset: 1px;
   }
+  .login-hint { margin: 0 0 12px; font-size: 12px; color: var(--on-brand-dim); line-height: 1.4; }
+  .login-err { min-height: 15px; font-size: 11px; color: #ffb4b4; font-weight: 600; margin: -3px 0 8px; word-break: break-word; }
 
   footer.form-actions {
     padding: 4px 16px 4px; display: flex; gap: 8px; justify-content: flex-end;
@@ -798,6 +800,80 @@
   // land back on the right list, instead of every one of those needing to
   // be rewritten to thread the category through by hand.
   let currentCategory = null;
+
+  // Shown instead of the normal landing screen once an admin has created
+  // an account for this person (see checkLoginGate below) — until then,
+  // this never runs and nothing about the app changes for anyone. No
+  // "skip" button on purpose: an account only exists because an admin
+  // deliberately created one, so once it does, logging in is the point.
+  // Forgot-password/locked-out isn't handled here — that's an admin
+  // resetting it (resetUserPassword in Code.gs), not a self-service flow.
+  function showLoginGate(suggestedUsername) {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = 'Log in';
+    els.main.style.minHeight = '';
+    els.main.innerHTML = `
+      <p class="login-hint">Your admin has set up an account for you — log in once to continue. You won't be asked again on this computer.</p>
+      <div class="field"><label>Username</label><input id="login-username" /></div>
+      <div class="field"><label>Password</label><input id="login-password" type="password" /></div>
+      <div class="login-err" id="login-err"></div>
+      <button class="primary" id="login-submit-btn" style="width:100%;">Log in</button>
+    `;
+    const userEl = document.getElementById('login-username');
+    const passEl = document.getElementById('login-password');
+    const errEl = document.getElementById('login-err');
+    const btn = document.getElementById('login-submit-btn');
+    userEl.value = suggestedUsername || '';
+
+    async function attemptLogin() {
+      const username = userEl.value.trim();
+      const password = passEl.value;
+      if (!username || !password) {
+        errEl.textContent = 'Enter your username and password.';
+        return;
+      }
+      errEl.textContent = '';
+      btn.disabled = true;
+      btn.textContent = 'Logging in…';
+      let result;
+      try {
+        result = await window.statusApp.login(username, password);
+      } catch (err) {
+        result = { ok: false, error: err.message || String(err) };
+      }
+      btn.disabled = false;
+      btn.textContent = 'Log in';
+      if (!result || !result.ok) {
+        errEl.textContent = (result && result.error) || 'Login failed — please try again.';
+        return;
+      }
+      showCategoryPicker();
+    }
+
+    btn.onclick = attemptLogin;
+    passEl.onkeydown = (e) => { if (e.key === 'Enter') attemptLogin(); };
+    (suggestedUsername ? passEl : userEl).focus();
+  }
+
+  // Runs before every landing-screen render (both the popup's initial load
+  // and every subsequent open — see onOpened below). Best-effort: if the
+  // check itself fails (offline, backend hiccup), this falls through to
+  // the normal screen exactly like today rather than blocking someone's
+  // whole workflow over a status check that isn't the thing they opened
+  // the app to do.
+  async function checkLoginGate() {
+    try {
+      const status = await window.statusApp.getSessionStatus();
+      if (status && !status.loggedIn && status.accountExists) {
+        showLoginGate(status.suggestedUsername);
+        return true;
+      }
+    } catch {
+      /* best-effort — fall through to the normal screen */
+    }
+    return false;
+  }
 
   // The landing screen: one big button per category from the _Categories
   // sheet tab (see groupTabsIntoCategories() in field-config.js), instead
@@ -1434,14 +1510,17 @@
     yourName = await window.statusApp.getYourName();
     refreshLiveOptions();
     refreshLiveFieldSchema();
-    showCategoryPicker(); // a fresh open always starts at the top, not wherever it was left last time
+    // a fresh open always starts at the top, not wherever it was left last
+    // time — unless checkLoginGate finds a login is now needed, in which
+    // case that's the top instead.
+    if (!(await checkLoginGate())) showCategoryPicker();
   });
 
   window.statusApp.getYourName().then((n) => (yourName = n));
   refreshLiveOptions();
   refreshLiveFieldSchema();
   checkAppVersion();
-  showCategoryPicker();
+  checkLoginGate().then((gated) => { if (!gated) showCategoryPicker(); });
 
   // Keep the actual OS window sized to whatever's on screen right now,
   // instead of a fixed height that leaves dead space for a short screen

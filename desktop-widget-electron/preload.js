@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('statusApp', {
   saveReportSettings: (settings) => ipcRenderer.invoke('save-report-settings', settings),
   getConnectGroups: () => ipcRenderer.invoke('get-connect-groups'),
   saveConnectGroups: (groups) => ipcRenderer.invoke('save-connect-groups', groups),
+  getSessionStatus: () => ipcRenderer.invoke('get-session-status'),
+  login: (username, password) => ipcRenderer.invoke('login', { username, password }),
+  logout: () => ipcRenderer.invoke('logout'),
   getWeeklyConnectTickets: () => ipcRenderer.invoke('get-weekly-connect-tickets'),
   updateWeeklyConnectTicket: (ticketId, status, comments) =>
     ipcRenderer.invoke('update-weekly-connect-ticket', { ticketId, status, comments }),

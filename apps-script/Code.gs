@@ -451,6 +451,20 @@ function doPost(e) {
     if (body.action === 'login') {
       return jsonOut(loginUser_(body.username, body.password));
     }
+    /** Lets the widget ask "does an account exist for me yet?" using the
+     * name already saved locally (YOUR_NAME), without needing a password
+     * to check. This is what makes rollout to existing installs work:
+     * nothing changes for anyone until an admin runs createUser for their
+     * name, and the very next time they open the app after that, it finds
+     * `exists: true` here and shows the login screen instead of silently
+     * requiring a reinstall or some other manual step. No account info
+     * beyond a bare yes/no leaves the server. */
+    if (body.action === 'hasAccount') {
+      if (!body.username) return jsonOut({ ok: false, error: 'Missing "username".' });
+      var hasData = usersSheetRows_();
+      var hasIdx = findUserRowIndex_(hasData.headers, hasData.rows, body.username);
+      return jsonOut({ ok: true, exists: hasIdx !== -1 });
+    }
     if (body.action === 'listUsers') {
       var listAuth = requireAdminSession_(body);
       if (listAuth.error) return jsonOut({ ok: false, error: listAuth.error });

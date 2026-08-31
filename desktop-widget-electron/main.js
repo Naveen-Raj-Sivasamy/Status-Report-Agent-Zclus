@@ -678,6 +678,56 @@ function createConnectWindow() {
   return win;
 }
 
+// -------------------- per-person login --------------------
+//
+// The session token lives in USER_CONFIG_PATH — the same per-person,
+// per-machine file YOUR_NAME already lives in — never in
+// CONNECTION_CONFIG_PATH (that's the shared org-level secret every install
+// carries). "Once per install, forever" per how this was scoped: logging
+// in writes the token here and it's just used from then on, no re-prompt,
+// until an admin deactivates that account (see setUserActive in Code.gs).
+ipcMain.handle('get-session-status', async () => {
+  var saved = loadUserConfig();
+  if (saved.sessionToken) {
+    return { loggedIn: true, username: saved.sessionUsername || '' };
+  }
+  // No local session yet — check whether an account now exists for the
+  // name already saved on this machine. This is what makes rollout to
+  // existing installs work without anyone reinstalling or doing anything
+  // themselves: nothing changes here until an admin runs createUser for
+  // that name, and the very next time the popup opens after that, this
+  // finds exists:true and the login screen shows instead of the normal
+  // form. Best-effort — a failed check here just means "don't gate this
+  // time", never a hard error surfaced to someone who isn't logging in.
+  var name = loadSavedName();
+  if (!name) return { loggedIn: false, accountExists: false };
+  try {
+    var result = await apiPostBody({ action: 'hasAccount', username: name }, { attempts: 1 });
+    return { loggedIn: false, accountExists: !!(result && result.exists), suggestedUsername: name };
+  } catch {
+    return { loggedIn: false, accountExists: false };
+  }
+});
+
+ipcMain.handle('login', async (_e, { username, password }) => {
+  try {
+    // attempts: 1 — a wrong password is a routine, expected outcome here,
+    // not a transient failure worth 3 retries and several seconds of
+    // exponential backoff before the person even sees "wrong password".
+    var result = await apiPostBody({ action: 'login', username, password }, { attempts: 1 });
+    if (result && result.sessionToken) {
+      saveUserConfig({ sessionToken: result.sessionToken, sessionUsername: result.username });
+    }
+    return result;
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('logout', () => {
+  saveUserConfig({ sessionToken: '', sessionUsername: '' });
+});
+
 // -------------------- in-app "Manage Fields & Options" --------------------
 
 // Reuses the exact same admin password as connecting to a new backend —

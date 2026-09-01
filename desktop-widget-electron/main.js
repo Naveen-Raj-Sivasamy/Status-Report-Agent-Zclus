@@ -5,6 +5,40 @@ const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const APP_VERSION = require('./package.json').version;
 
+// Must be the very first real thing this process does. Without it, every
+// click on the desktop icon or taskbar launches a completely separate,
+// independent Electron process — each creating its own tray icon and
+// floating button that piles up alongside whatever's already running,
+// instead of just bringing the existing one to the front. That's exactly
+// the "clicking it makes a new icon every time" bug this fixes.
+// requestSingleInstanceLock() claims a lock this process holds until it
+// exits; if it can't (another instance already holds it), this same call
+// returns false here, and the only correct thing left to do is quit
+// immediately — before creating a tray icon, a window, or touching
+// anything else below. The early `return` (valid at this position — every
+// Node module is itself wrapped in a function) is what actually skips
+// all of that for this rejected second copy; app.quit() alone only
+// schedules a quit; it doesn't stop the rest of this file from running.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  return;
+}
+// This instance won the lock — if someone tries to launch a second copy
+// later, Electron fires this on the ORIGINAL instance instead of letting
+// the second one start. Bring the existing popup forward rather than
+// silently doing nothing, which would look just as broken as the bug
+// being fixed here. popup/floatBtn/toggleWindow are declared further
+// down, but this callback only ever runs later, once they're already
+// initialized — never at registration time.
+app.on('second-instance', () => {
+  if (popup && !popup.isDestroyed()) {
+    if (popup.isVisible()) popup.focus();
+    else toggleWindow();
+  } else if (floatBtn) {
+    toggleWindow();
+  }
+});
+
 // Dev convenience: a full config.json next to main.js (gitignored) overrides
 // everything, including YOUR_NAME — this is what `npm start` uses locally.
 const CONFIG_PATH = path.join(__dirname, 'config.json');

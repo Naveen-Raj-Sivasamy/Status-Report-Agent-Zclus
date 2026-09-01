@@ -417,6 +417,8 @@ function doPost(e) {
       if (!found) {
         return jsonOut({ ok: false, error: 'Ticket "' + body.ticketId + '" not found.' });
       }
+      logAudit_(body.sessionToken, 'update', WEEKLY_CONNECT_TAB_NAME,
+        'Ticket #' + body.ticketId + ' -> Status: ' + (body.status || '(unchanged)'));
       return jsonOut({ ok: true, message: 'Ticket updated.' });
     }
 
@@ -468,19 +470,25 @@ function doPost(e) {
     if (body.action === 'login') {
       return jsonOut(loginUser_(body.username, body.password));
     }
-    /** Lets the widget ask "does an account exist for me yet?" using the
-     * name already saved locally (YOUR_NAME), without needing a password
-     * to check. This is what makes rollout to existing installs work:
-     * nothing changes for anyone until an admin runs createUser for their
-     * name, and the very next time they open the app after that, it finds
+    /** Lets the widget ask "does an account exist for me yet, and is
+     * logging in mandatory right now?" using the name already saved
+     * locally (YOUR_NAME), without needing a password to check.
+     * `exists` is what makes rollout to existing installs work: nothing
+     * changes for anyone until an admin runs createUser for their name,
+     * and the very next time they open the app after that, it finds
      * `exists: true` here and shows the login screen instead of silently
-     * requiring a reinstall or some other manual step. No account info
-     * beyond a bare yes/no leaves the server. */
+     * requiring a reinstall or some other manual step. `requireLogin`
+     * (from _Config's RequireLogin, default FALSE) is the separate,
+     * later switch: once an admin flips that on — after everyone already
+     * has an account, not before — EVERY install gets gated regardless of
+     * whether its saved name happens to match an account, not just ones
+     * that do. No account info beyond these two booleans leaves the
+     * server; a blank/no username still gets a real requireLogin value
+     * back, just with exists always false. */
     if (body.action === 'hasAccount') {
-      if (!body.username) return jsonOut({ ok: false, error: 'Missing "username".' });
       var hasData = usersSheetRows_();
-      var hasIdx = findUserRowIndex_(hasData.headers, hasData.rows, body.username);
-      return jsonOut({ ok: true, exists: hasIdx !== -1 });
+      var hasIdx = body.username ? findUserRowIndex_(hasData.headers, hasData.rows, body.username) : -1;
+      return jsonOut({ ok: true, exists: hasIdx !== -1, requireLogin: getConfigValue('RequireLogin') === 'TRUE' });
     }
     if (body.action === 'listUsers') {
       var listAuth = requireAdminSession_(body);
@@ -670,6 +678,16 @@ function doPost(e) {
     // this week's real discussion, same custom-range picker Report
     // Generator already uses — see the ticket list screen's "Post to
     // Teams" button.
+
+    // Best-effort, after the lock is already released — see logAudit_'s
+    // own comment for why this never blocks or fails the actual save.
+    // A short, generic summary (first few populated fields) rather than
+    // anything per-tab special-cased, since this runs for every tab.
+    var auditSummary = headers.slice(0, 3).map(function (h) {
+      return values[h] ? h + ': ' + String(values[h]).slice(0, 40) : null;
+    }).filter(Boolean).join(', ');
+    logAudit_(body.sessionToken, 'submit', body.tab, auditSummary || 'New entry added.');
+
     return jsonOut({ ok: true, message: 'Saved to "' + body.tab + '".' });
   } catch (err) {
     return jsonOut({ ok: false, error: String(err) });
@@ -1480,6 +1498,61 @@ function listUsersPublic_() {
   });
 }
 
+// -------------------- audit log (who did what) --------------------
+//
+// _Sessions already answers "who logged in, and when" — this answers the
+// separate question "who actually submitted/edited THIS". Deliberately
+// its own tab, not a new column bolted onto every existing tab (Daily
+// Status, Weekly_Connect, Leave, ...): those already have a fixed column
+// set other things (report generation, _FieldSchema rows) expect, and
+// this needs to work the same way across all of them without touching
+// any of that. And deliberately NO formulas here, ever — the whole
+// reason this app had a real "stuck on Saving" problem for a long time
+// was formulas with wide references recalculating on every single edit
+// anywhere in the workbook. A plain, formula-free log tab that nothing
+// else references can't trigger that, no matter how many rows pile up.
+var AUDIT_LOG_TAB_NAME = '_AuditLog';
+var AUDIT_LOG_COLUMNS = ['Timestamp', 'Username', 'Action', 'Tab', 'Summary'];
+
+function ensureAuditLogTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(AUDIT_LOG_TAB_NAME)) return;
+  var sheet = ss.insertSheet(AUDIT_LOG_TAB_NAME);
+  sheet.getRange(1, 1, 1, AUDIT_LOG_COLUMNS.length).setValues([AUDIT_LOG_COLUMNS]);
+}
+
+/** Resolves a sessionToken to a username for logging, without ever
+ * throwing or blocking the real action over it — logging in isn't
+ * required for regular submissions yet (see RequireLogin above), so a
+ * missing/invalid token here just means "not logged in", not an error.
+ * Never call this inside the write lock other actions already hold for
+ * their own appendRow — it's a plain read (validateSession_), safe
+ * either way, but keeping it outside keeps the lock's own critical
+ * section exactly what it was before this existed. */
+function resolveAuditUsername_(sessionToken) {
+  try {
+    var session = validateSession_(sessionToken);
+    return session ? session.username : '(not logged in)';
+  } catch (err) {
+    return '(not logged in)';
+  }
+}
+
+/** Best-effort, always — a failure to log an action should never turn a
+ * successful save into an error, or block it in any way. Called AFTER
+ * the real write's lock is already released, same reasoning as
+ * everything else in this app that does something non-essential after
+ * the actual data is safely saved (e.g. the old Teams-posting design). */
+function logAudit_(sessionToken, action, tab, summary) {
+  try {
+    ensureAuditLogTab();
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(AUDIT_LOG_TAB_NAME);
+    sheet.appendRow([new Date(), resolveAuditUsername_(sessionToken), action, tab || '', summary || '']);
+  } catch (err) {
+    Logger.log('logAudit_ failed: ' + err);
+  }
+}
+
 /** Every Weekly Connect ticket as a plain object per row, newest first —
  * powers the widget's "View & Update Tickets" list (the same list also
  * serves as the "open items" agenda view and the picker for
@@ -1898,7 +1971,10 @@ function getFieldSchemaMap() {
  * widget's in-app "Manage Fields & Options" screen. Only ever called while
  * already holding the write lock (see doPost). A (Tab, Column) with a
  * blank Tab, Column, or Type is dropped rather than written as a broken
- * row. */
+ * row. Also creates the actual column on its tab's sheet if it doesn't
+ * exist yet (ensureColumnExists_) — this is what lets "define a field's
+ * type from the app" genuinely CREATE that field, not just assign a type
+ * to a column that has to already exist on the Sheet first. */
 function writeFieldSchemaMap(map) {
   ensureFieldSchemaTab();
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(FIELD_SCHEMA_TAB_NAME);
@@ -1912,6 +1988,7 @@ function writeFieldSchemaMap(map) {
       var spec = columns[columnName] || {};
       var type = String(spec.type || '').trim();
       if (!column || !type) return;
+      ensureColumnExists_(tab, column);
       rows.push([tab, column, type, String(spec.optionsKey || '').trim(), String(spec.basedOn || '').trim()]);
     });
   });
@@ -2273,6 +2350,27 @@ function getColumns(tabName) {
   });
 }
 
+/** Adds `column` as a new header on `tab`'s actual sheet if it isn't
+ * already there (case-insensitive match, so "Site"/"site" don't end up
+ * as two separate columns) — a no-op if it already exists. This is what
+ * makes "define a field's Type from the app" also able to genuinely
+ * CREATE that field, not just assign a type to a column that has to
+ * already exist. Matches the promise made in the app/Sheet comparison
+ * table (_Features / the Manage screen's own "In App" column) that this
+ * is doable from either side, not Sheet-only. No-ops quietly if the tab
+ * itself doesn't exist — the caller (writeFieldSchemaMap) already has
+ * nothing to attach a schema row to in that case either. */
+function ensureColumnExists_(tab, column) {
+  var sheet = getSheetByName(tab);
+  if (!sheet) return;
+  var trimmed = String(column).trim();
+  if (!trimmed) return;
+  var headers = getHeaderRow(sheet);
+  var exists = headers.some(function (h) { return String(h).trim().toLowerCase() === trimmed.toLowerCase(); });
+  if (exists) return;
+  sheet.getRange(1, sheet.getLastColumn() + 1).setValue(trimmed);
+}
+
 // Name of the hidden config tab holding app-version/download-link info the
 // widget checks on launch. Created automatically (with sensible defaults)
 // the first time it's needed — no manual setup required. Starts with "_"
@@ -2315,6 +2413,14 @@ function ensureConfigDefaults_(sheet) {
     ['ReportRecipients', ''],
     ['ReminderRecipients', ''],
     ['TeamsWebhookUrl', ''],
+    // 'FALSE' by default on purpose — flipping this to 'TRUE' makes login
+    // mandatory for everyone (see the hasAccount action's requireLogin
+    // field, and index.html's checkLoginGate). Defaulting to FALSE means
+    // shipping the code that reads this never locks anyone out on its
+    // own — it only takes effect once you deliberately set it here,
+    // after every current teammate already has an account (createUser).
+    // Editable right here in the Sheet, or from a future Manage screen.
+    ['RequireLogin', 'FALSE'],
   ];
   var data = sheet.getDataRange().getValues();
   var existingKeys = data.slice(1).map(function (r) { return String(r[0]).trim(); });

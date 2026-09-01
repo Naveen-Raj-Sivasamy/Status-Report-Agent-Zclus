@@ -33,6 +33,15 @@
     -webkit-app-region: no-drag; /* stay clickable inside the draggable title bar */
   }
   .titlebar-close:hover { background: rgba(255,255,255,0.24); }
+  /* Second grab point, opposite end from the titlebar — same as
+     manage.html's .drag-footer. Inherits drag from body itself, it's
+     just a flex sibling of .content that isn't inside its no-drag area. */
+  .drag-footer {
+    flex: 0 0 auto; height: 14px; display: flex; align-items: center; justify-content: center;
+  }
+  .drag-footer::before {
+    content: '•••'; color: rgba(255,255,255,0.25); font-size: 10px; letter-spacing: 3px;
+  }
   .content {
     /* -webkit-app-region: no-drag — same fix as manage.html's
        .scroll-area, see its comment for the full reasoning: body above
@@ -108,6 +117,8 @@
       <div class="err" id="form-err"></div>
     </div>
   </div>
+
+  <div class="drag-footer"></div>
 
 <script>
   document.getElementById('titlebar-close-btn').addEventListener('click', () => window.close());

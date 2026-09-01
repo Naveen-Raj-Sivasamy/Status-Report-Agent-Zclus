@@ -208,9 +208,18 @@ async function apiGet(params, opts) {
 
 async function apiPostBody(body, opts) {
   return callWithRetry(async () => {
+    // Attaches whatever session is currently stored, on every POST, not
+    // just the admin actions that were already passing their own — this
+    // is what lets the backend attribute a regular submit/update to a
+    // real account for the audit log (logAudit_ in Code.gs), without
+    // every single IPC handler needing to remember to thread it through
+    // by hand. `body`'s own sessionToken (if it set one) still wins,
+    // since Object.assign applies it after — same value either way, an
+    // admin action's own explicit one just reads from the same place.
+    const sessionToken = loadUserConfig().sessionToken || '';
     const resp = await fetch(config.WEBHOOK_URL, {
       method: 'POST',
-      body: JSON.stringify(Object.assign({ token: config.TOKEN }, body)),
+      body: JSON.stringify(Object.assign({ token: config.TOKEN, sessionToken }, body)),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -738,20 +747,26 @@ ipcMain.handle('get-session-status', async () => {
     return { loggedIn: true, username: saved.sessionUsername || '', role: saved.sessionRole || '' };
   }
   // No local session yet — check whether an account now exists for the
-  // name already saved on this machine. This is what makes rollout to
-  // existing installs work without anyone reinstalling or doing anything
-  // themselves: nothing changes here until an admin runs createUser for
-  // that name, and the very next time the popup opens after that, this
-  // finds exists:true and the login screen shows instead of the normal
-  // form. Best-effort — a failed check here just means "don't gate this
-  // time", never a hard error surfaced to someone who isn't logging in.
+  // name already saved on this machine, AND whether login has been made
+  // mandatory for everyone (_Config's RequireLogin — see hasAccount in
+  // Code.gs). Both are opt-in switches an admin controls on their own
+  // timeline: accountExists is per-person (rollout to existing installs
+  // without anyone reinstalling), requireLogin is the later, global one
+  // (only meant to be flipped on once every current teammate already has
+  // an account). Best-effort — a failed check here just means "don't
+  // gate this time", never a hard error surfaced to someone who isn't
+  // logging in.
   var name = loadSavedName();
-  if (!name) return { loggedIn: false, accountExists: false };
   try {
-    var result = await apiPostBody({ action: 'hasAccount', username: name }, { attempts: 1 });
-    return { loggedIn: false, accountExists: !!(result && result.exists), suggestedUsername: name };
+    var result = await apiPostBody({ action: 'hasAccount', username: name || '' }, { attempts: 1 });
+    return {
+      loggedIn: false,
+      accountExists: !!(result && result.exists),
+      requireLogin: !!(result && result.requireLogin),
+      suggestedUsername: name,
+    };
   } catch {
-    return { loggedIn: false, accountExists: false };
+    return { loggedIn: false, accountExists: false, requireLogin: false };
   }
 });
 

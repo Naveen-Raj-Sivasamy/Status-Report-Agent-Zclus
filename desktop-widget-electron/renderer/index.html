@@ -882,7 +882,12 @@
   async function checkLoginGate() {
     try {
       const status = await window.statusApp.getSessionStatus();
-      if (status && !status.loggedIn && status.accountExists) {
+      // accountExists: the per-person rollout (an admin created THIS
+      // name's account specifically). requireLogin: the later, global
+      // switch (_Config's RequireLogin) — once an admin turns that on,
+      // everyone gets gated regardless of whether their saved name
+      // happens to match an account, not just the ones that do.
+      if (status && !status.loggedIn && (status.accountExists || status.requireLogin)) {
         showLoginGate(status.suggestedUsername);
         return true;
       }

@@ -33,6 +33,17 @@
     -webkit-app-region: no-drag; /* stay clickable inside the draggable title bar */
   }
   .titlebar-close:hover { background: rgba(255,255,255,0.24); }
+  /* Second grab point, opposite end from the titlebar — see the comment
+     where this element is placed in the body. Inherits drag from body
+     itself (no explicit app-region needed), it's just a flex sibling of
+     .scroll-area that isn't inside its no-drag area. The three dots are
+     a plain visual affordance so it doesn't look like empty dead space. */
+  .drag-footer {
+    flex: 0 0 auto; height: 14px; display: flex; align-items: center; justify-content: center;
+  }
+  .drag-footer::before {
+    content: '•••'; color: rgba(255,255,255,0.25); font-size: 10px; letter-spacing: 3px;
+  }
   /* -webkit-app-region: no-drag here is the actual fix for "scrollbar
      doesn't work" — body above is a drag region (see its own comment),
      and this content area was never excluded from it. Electron drag
@@ -178,7 +189,7 @@
 
     <div class="section">
       <h3>Field Types</h3>
-      <p class="hint">Which fields get a dropdown/date/checkbox/etc. A field left off here is just plain text — that's fine, most fields don't need anything special.</p>
+      <p class="hint">Which fields get a dropdown/date/checkbox/etc. A field left off here is just plain text — that's fine, most fields don't need anything special. Column shows every real column on that tab — or just type a name that isn't listed yet and it's created on the sheet when you save, no need to add it there first.</p>
       <div id="fs-rows"></div>
       <div class="row-actions">
         <button class="secondary" id="add-fs-row-btn">+ Add field</button>
@@ -245,6 +256,14 @@
     <button class="secondary" id="close-btn" style="width:100%;">Close</button>
   </div>
   </div>
+
+  <!-- A thin always-draggable strip at the very bottom — .scroll-area
+       above is deliberately no-drag now (that's the actual scrolling
+       fix), which left dragging possible only via the titlebar strip at
+       the very top. This gives a second, easier-to-reach grab point
+       without bringing back the "swallows scroll input" problem, since
+       it's a sibling of .scroll-area, not inside it. -->
+  <div class="drag-footer"></div>
 
 <script>
   document.getElementById('titlebar-close-btn').addEventListener('click', () => window.close());
@@ -509,16 +528,27 @@
     });
     tabSel.value = tab || '';
 
-    const colSel = document.createElement('select');
+    // A combo, not a strict dropdown: pick a real existing column from the
+    // suggestions, or just type a name that isn't there yet — saving with
+    // a new name creates that column on the actual sheet (see
+    // ensureColumnExists_ in Code.gs). Used to be a <select> restricted to
+    // columns that already existed, which meant "define a field's type
+    // from the app" could never actually CREATE the field — only the
+    // Sheet side could, contradicting what the comparison table above
+    // already claims is possible from either side.
+    const colListId = 'fs-col-list-' + Math.random().toString(36).slice(2);
+    const colSel = document.createElement('input');
+    colSel.type = 'text';
     colSel.className = 'fs-col';
+    colSel.setAttribute('list', colListId);
+    colSel.placeholder = 'Pick an existing column, or type a new one';
+    colSel.value = column || '';
+    const colDatalist = document.createElement('datalist');
+    colDatalist.id = colListId;
 
-    async function populateColumns(selectedTab, currentColumn) {
-      colSel.innerHTML = '';
-      if (!selectedTab) {
-        colSel.appendChild(new Option('— choose a tab first —', ''));
-        return;
-      }
-      colSel.appendChild(new Option('Loading…', ''));
+    async function populateColumns(selectedTab) {
+      colDatalist.innerHTML = '';
+      if (!selectedTab) return;
       let cols = [];
       try {
         const res = await window.statusApp.getColumns(selectedTab);
@@ -526,19 +556,14 @@
       } catch {
         cols = [];
       }
-      colSel.innerHTML = '';
-      colSel.appendChild(new Option('— column —', ''));
-      cols.forEach((c) => colSel.appendChild(new Option(c, c)));
-      // The saved column might not be on the live sheet any more (renamed
-      // or removed) — keep it selectable so saving doesn't silently drop
-      // it, but flag that clearly instead of pretending it's a real column.
-      if (currentColumn && cols.indexOf(currentColumn) === -1) {
-        colSel.appendChild(new Option(currentColumn + ' (not found on sheet)', currentColumn));
-      }
-      colSel.value = currentColumn || '';
+      cols.forEach((c) => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        colDatalist.appendChild(opt);
+      });
     }
-    populateColumns(tab, column);
-    tabSel.onchange = () => populateColumns(tabSel.value, '');
+    populateColumns(tab);
+    tabSel.onchange = () => { colSel.value = ''; populateColumns(tabSel.value); };
 
     const typeSel = document.createElement('select');
     typeSel.className = 'fs-type';
@@ -559,6 +584,7 @@
 
     header.appendChild(labeled('Tab', tabSel));
     header.appendChild(labeled('Column', colSel));
+    header.appendChild(colDatalist); // not visible itself — colSel's list="" attribute points at it
     header.appendChild(labeled('Type', typeSel));
     header.appendChild(del);
     row.appendChild(header);

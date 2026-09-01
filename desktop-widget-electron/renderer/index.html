@@ -661,12 +661,32 @@
     return null;
   }
 
-  function showReportOptions() {
+  async function showReportOptions() {
     els.footer.classList.add('hidden');
     els.reportActions.classList.add('hidden');
     els.sub.textContent = 'Generate a report';
-    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
+    els.main.style.minHeight = '';
+    showLoading('Loading…');
+    // Which report configs exist decides whether a "Report" picker shows
+    // at all — an org with just the one report (still the common case)
+    // never sees an extra control for a choice they don't have; this
+    // only appears once there's genuinely more than one to pick between.
+    let configs = [];
+    try {
+      const res = await window.statusApp.getReportConfigs();
+      configs = (res && res.configs) || [];
+    } catch {
+      configs = []; // best-effort — the range/send flow below still works with no config selected, backend defaults to the first one
+    }
+
     els.main.innerHTML = `
+      ${configs.length > 1 ? `
+        <div class="field">
+          <label>Report</label>
+          <select id="report-config-select">
+            ${configs.map((c) => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('')}
+          </select>
+        </div>` : ''}
       <div class="field">
         <label>Range</label>
         <select id="range-type">
@@ -691,6 +711,14 @@
     rangeType.onchange = renderSubFields;
     renderSubFields();
 
+    // Single config (or none returned/set up yet) → undefined, which the
+    // backend already treats as "use the first/only one" — see
+    // getReportConfigByName_ in Code.gs.
+    const selectedConfigName = () => {
+      const select = document.getElementById('report-config-select');
+      return select ? select.value : undefined;
+    };
+
     document.getElementById('report-back-btn').onclick = showTabPicker;
 
     document.getElementById('email-report-btn').onclick = async () => {
@@ -703,7 +731,7 @@
       }
       showLoading('Sending report…');
       try {
-        await window.statusApp.sendReportNow(range);
+        await window.statusApp.sendReportNow(range, selectedConfigName());
         showResult({
           success: true,
           title: 'Submitted Successfully!',
@@ -732,7 +760,7 @@
       }
       showLoading('Preparing file…');
       try {
-        const result = await window.statusApp.downloadReport(range);
+        const result = await window.statusApp.downloadReport(range, selectedConfigName());
         if (result.canceled) {
           showReportOptions(); // they backed out of the save dialog — no error, just go back
           return;

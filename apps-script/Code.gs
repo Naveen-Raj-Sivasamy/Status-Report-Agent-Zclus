@@ -258,33 +258,36 @@ function doPost(e) {
     }
 
     if (body.action === 'sendReportNow') {
-      compileAndSendReport(parseRangeFromRequest(body));
+      compileAndSendReport(parseRangeFromRequest(body), body.configName);
       return jsonOut({ ok: true, message: 'Report sent.' });
     }
 
     /** Same report as sendReportNow, but to exactly one address instead of
-     * the whole REPORT_RECIPIENTS list — for previewing a design/content
+     * the whole config's recipient list — for previewing a design/content
      * change (like the HTML email) without emailing the entire team every
      * time. Not exposed anywhere in the widget UI on purpose; call it
      * directly (e.g. from the Apps Script editor's Run, or a one-off
      * request) when you actually want a preview. */
     if (body.action === 'sendTestReport') {
       if (!body.to) return jsonOut({ ok: false, error: 'Missing "to".' });
-      // Restricted to REPORT_RECIPIENTS, not an arbitrary address — the
-      // shared TOKEN is baked into every installed widget (and has leaked
-      // once before, which is why it exists as a Script Property instead
-      // of hardcoded now), so letting `to` be attacker-controlled would
-      // turn this into a way to mail the full report — attachment
-      // included — to any outside address using nothing but that token.
-      if (getReportRecipients().indexOf(body.to) === -1) {
-        return jsonOut({ ok: false, error: '"to" must be one of the current report recipients.' });
+      var testConfig = getReportConfigByName_(body.configName);
+      if (!testConfig) return jsonOut({ ok: false, error: 'No report configured yet.' });
+      // Restricted to that config's own recipients, not an arbitrary
+      // address — the shared TOKEN is baked into every installed widget
+      // (and has leaked once before, which is why it exists as a Script
+      // Property instead of hardcoded now), so letting `to` be
+      // attacker-controlled would turn this into a way to mail the full
+      // report — attachment included — to any outside address using
+      // nothing but that token.
+      if (testConfig.recipients.indexOf(body.to) === -1) {
+        return jsonOut({ ok: false, error: '"to" must be one of "' + testConfig.name + '"\'s current recipients.' });
       }
       var testRange = parseRangeFromRequest(body) || getCurrentWeekRange();
-      var testBuilt = buildReportBlob(testRange);
+      var testBuilt = buildReportBlob(testRange, testConfig);
       var testSheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
       MailApp.sendEmail({
         to: body.to,
-        subject: '[TEST] Status Report — ' + formatRangeLabel(testRange),
+        subject: '[TEST] ' + testConfig.name + ' — ' + formatRangeLabel(testRange),
         body: reportEmailPlainText(testRange, testBuilt, testSheetUrl),
         htmlBody: reportEmailHtml(testRange, testBuilt, testSheetUrl),
         attachments: [testBuilt.blob],
@@ -293,8 +296,27 @@ function doPost(e) {
     }
 
     if (body.action === 'downloadReport') {
-      var file = getReportFileBase64(parseRangeFromRequest(body));
+      var file = getReportFileBase64(parseRangeFromRequest(body), body.configName);
       return jsonOut({ ok: true, fileName: file.fileName, base64: file.base64 });
+    }
+
+    /** Read/write for _ReportConfigs — the app/Sheet comparison table's
+     * "In App" column for this needs a real backend action, same
+     * reasoning as saveOptions/saveFieldSchema/saveCategories above. */
+    if (body.action === 'getReportConfigs') {
+      return jsonOut({ ok: true, configs: getReportConfigs() });
+    }
+    if (body.action === 'saveReportConfigs') {
+      var configsLock = LockService.getScriptLock();
+      if (!configsLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        writeReportConfigs(body.configs || []);
+      } finally {
+        configsLock.releaseLock();
+      }
+      return jsonOut({ ok: true, message: 'Report configs saved.' });
     }
 
     /** Lets the widget's Settings screen trigger the same clearCache()
@@ -762,9 +784,23 @@ function clearCache() {
 // ============================ SCHEDULED JOBS ==============================
 
 /**
- * Run this once manually (Run > setupTriggers) to install the two weekly
- * triggers. Safe to re-run: it clears old triggers from this project first
- * so you never end up with duplicates.
+ * Run this once manually (Run > setupTriggers) to install the Friday
+ * reminder trigger (and, as of the multi-config Report Configs system,
+ * the shared hourly report-schedule dispatcher too). Safe to re-run: it
+ * clears old triggers from this project first so you never end up with
+ * duplicates.
+ *
+ * No longer creates a fixed Friday-11pm report trigger here —
+ * scheduledCompileAndSendReport() (still defined below, just no longer
+ * wired to a new trigger by this function) has been superseded by
+ * runScheduledReports_(), which checks every _ReportConfigs entry's own
+ * ScheduleDay/ScheduleHour instead of one hardcoded time. That dispatcher
+ * gets created below via ensureScheduledReportsTrigger_() — the same
+ * self-healing call that also fires automatically the moment
+ * _ReportConfigs is first created (see ensureReportConfigsTab), so this
+ * function existing/being re-run isn't actually required for scheduling
+ * to work at all; it's here mainly for the Friday reminder, and as a
+ * manual "make sure both exist" fallback.
  */
 function setupTriggers() {
   var triggers = ScriptApp.getProjectTriggers();
@@ -778,14 +814,9 @@ function setupTriggers() {
     .atHour(18) // 6pm, script timezone (see appsscript.json -> Asia/Kolkata)
     .create();
 
-  ScriptApp.newTrigger('scheduledCompileAndSendReport')
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.FRIDAY)
-    .atHour(23) // 11pm
-    .nearMinute(0)
-    .create();
+  ensureScheduledReportsTrigger_();
 
-  Logger.log('Triggers installed: Friday 6pm reminder, Friday 11pm report.');
+  Logger.log('Triggers installed: Friday 6pm reminder, hourly report-schedule dispatcher.');
 }
 
 /** Rows under HOLIDAYS_TAB_NAME, if that tab exists, are compared against
@@ -877,19 +908,28 @@ function sendFridayReminder() {
  * (compileAndSendReport) and the download path (getReportFileBase64) so
  * there's exactly one place that knows how to filter/build a report.
  */
-function buildReportBlob(range) {
+/** `config` is a getReportConfigs()-shaped object — {name, tabs: [{tab,
+ * fields}], ...}. Date-range filtering always uses the tab's FULL header
+ * row (so filtering still works correctly even if Date itself isn't one
+ * of the selected output columns); column selection is applied
+ * separately, after filtering, to decide what actually gets written to
+ * the output sheet. An empty `fields` list means every column, same as
+ * today's report always included everything — this is what makes the
+ * migrated default config behave identically to before. */
+function buildReportBlob(range, config) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var tempName = ss.getName() + ' — ' + formatRangeLabel(range);
+  var tempName = ss.getName() + ' — ' + config.name + ' — ' + formatRangeLabel(range);
 
   var temp = SpreadsheetApp.create(tempName);
-  // getReportTabs(), not listVisibleTabsUncached() — the report is scoped
-  // to an explicit list of real tabs, not "whatever's visible in the
+  // config.tabs, not listVisibleTabsUncached() — the report is scoped to
+  // this config's explicit list of tabs, not "whatever's visible in the
   // widget right now" (filtered defensively in case one's been
-  // renamed/removed).
-  var tabNames = getReportTabs().filter(function (name) { return !!getSheetByName(name); });
-  var counts = []; // [{tab, count}, ...] in the same order as tabNames — used by the email body
+  // renamed/removed since this config was set up).
+  var tabEntries = config.tabs.filter(function (t) { return !!getSheetByName(t.tab); });
+  var counts = []; // [{tab, count}, ...] in the same order as tabEntries — used by the email body
 
-  tabNames.forEach(function (tabName, i) {
+  tabEntries.forEach(function (entry, i) {
+    var tabName = entry.tab;
     var source = getSheetByName(tabName);
     var headers = getHeaderRow(source);
     var dateIndex = findColumnIndex(headers, REPORT_DATE_COLUMN);
@@ -908,10 +948,27 @@ function buildReportBlob(range) {
     }
     counts.push({ tab: tabName, count: rows.length });
 
+    // Column selection, applied AFTER date filtering above (which needs
+    // the tab's real header indexes) — a non-empty Fields list picks out
+    // just those columns' indexes, in the order the config listed them,
+    // not the sheet's own column order, so an admin can reorder what
+    // shows up in the report just by reordering Fields.
+    var outHeaders = headers;
+    var outRows = rows;
+    if (entry.fields && entry.fields.length) {
+      var colIndexes = entry.fields
+        .map(function (f) { return findColumnIndex(headers, f); })
+        .filter(function (idx) { return idx !== -1; });
+      if (colIndexes.length) {
+        outHeaders = colIndexes.map(function (idx) { return headers[idx]; });
+        outRows = rows.map(function (r) { return colIndexes.map(function (idx) { return r[idx]; }); });
+      }
+    }
+
     var dest = i === 0 ? temp.getSheets()[0].setName(tabName) : temp.insertSheet(tabName);
-    dest.getRange(1, 1, 1, headers.length).setValues([headers]);
-    if (rows.length) {
-      dest.getRange(2, 1, rows.length, headers.length).setValues(rows);
+    dest.getRange(1, 1, 1, outHeaders.length).setValues([outHeaders]);
+    if (outRows.length) {
+      dest.getRange(2, 1, outRows.length, outHeaders.length).setValues(outRows);
     }
   });
 
@@ -938,20 +995,28 @@ function isWorkWeekRange_(range) {
 }
 
 /**
- * Emails the report for `range` (defaults to the current Mon-Fri work week —
- * this is what the Friday 11pm trigger calls with no argument) to
- * getReportRecipients().
+ * Emails the report for `range` (defaults to the current Mon-Fri work week)
+ * under `configName`'s setup — its tabs, its selected fields, its
+ * recipients. `configName` blank/not found falls back to the first
+ * config (see getReportConfigByName_) — what makes this work exactly as
+ * before for anyone not sending an explicit one yet, since almost every
+ * deployment only has the one migrated "Report Generator" config.
+ * Silently does nothing if no config exists at all (a brand-new org that
+ * hasn't set one up yet) rather than erroring on a scheduled trigger
+ * with no one watching.
  */
-function compileAndSendReport(range) {
+function compileAndSendReport(range, configName) {
+  var config = getReportConfigByName_(configName);
+  if (!config) return;
   range = range || getCurrentWeekRange();
-  var built = buildReportBlob(range);
+  var built = buildReportBlob(range, config);
 
-  var subject = 'Status Report — ' +
+  var subject = config.name + ' — ' +
     (isWorkWeekRange_(range) ? weekLabelForDate_(range.end) + ' — ' : '') +
     formatRangeLabel(range);
   var sheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
 
-  getReportRecipients().forEach(function (addr) {
+  config.recipients.forEach(function (addr) {
     MailApp.sendEmail({
       to: addr,
       subject: subject,
@@ -1021,7 +1086,7 @@ function escapeHtml_(s) {
 
 /** Same report as compileAndSendReport, but handed back as base64 instead
  * of emailed — for the app's "Download" option. */
-function getReportFileBase64(range) {
+function getReportFileBase64(range, configName) {
   // Was missing the same `range || getCurrentWeekRange()` default
   // compileAndSendReport has right above — meant every "Download Report"
   // with the default "This Week" selection (range comes through as null)
@@ -1029,7 +1094,9 @@ function getReportFileBase64(range) {
   // instead of actually downloading anything. Found via a live test
   // during a full test sweep.
   range = range || getCurrentWeekRange();
-  var built = buildReportBlob(range);
+  var config = getReportConfigByName_(configName);
+  if (!config) throw new Error('No report configured yet — set one up in Manage Fields & Options first.');
+  var built = buildReportBlob(range, config);
   return { fileName: built.fileName, base64: Utilities.base64Encode(built.blob.getBytes()) };
 }
 
@@ -2545,6 +2612,224 @@ function getReminderRecipients() {
 function getTeamsWebhookUrl() {
   var fromSheet = getConfigValue('TeamsWebhookUrl');
   return fromSheet || TEAMS_WEBHOOK_URL;
+}
+
+// -------------------- Report Configs (multiple, independent reports) --------------------
+//
+// Generalizes what used to be exactly one hardcoded report (_Config's
+// ReportTabs/ReportRecipients, sent every Friday 11pm to a fixed
+// address list) into as many independent, named report setups as an
+// org actually needs — each with its own tabs, its own selected
+// columns per tab, its own recipients, and (Sprint 2) its own
+// schedule. A client that only ever wants the one report they have
+// today still gets exactly that; one that wants a second report for a
+// different team/category with different fields and a different
+// audience can just add another row here — no code change, same as
+// everything else in this file.
+//
+// One row per (ConfigName, Tab) pair — a config spanning several tabs
+// is just several rows sharing the same ConfigName, same shape as
+// _FieldSchema being one row per (Tab, Column). Fields is a
+// comma-separated column allowlist for THAT tab within THAT config;
+// blank means "every column on that tab", which is what preserves
+// today's exact behavior for the migrated default config below.
+var REPORT_CONFIGS_TAB_NAME = '_ReportConfigs';
+var REPORT_CONFIGS_COLUMNS = ['ConfigName', 'Tab', 'Fields', 'Recipients', 'ScheduleDay', 'ScheduleHour', 'Enabled'];
+
+/** Created once. If _Config already had a ReportTabs/ReportRecipients
+ * setup (every existing deployment, this one included), migrates it
+ * into a single "Report Generator" config — one row per tab already in
+ * ReportTabs, Fields left blank (= all columns, so this migration
+ * changes nothing about what the existing report contains), same
+ * recipients, and the same Friday 11pm schedule the fixed trigger
+ * already sends at. A brand-new organization with nothing in ReportTabs
+ * yet just gets an empty tab with headers, same "honest blank instead
+ * of someone else's setup" rule every other ensure*Tab() here follows. */
+function ensureReportConfigsTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(REPORT_CONFIGS_TAB_NAME)) return;
+  var sheet = ss.insertSheet(REPORT_CONFIGS_TAB_NAME);
+  sheet.getRange(1, 1, 1, REPORT_CONFIGS_COLUMNS.length).setValues([REPORT_CONFIGS_COLUMNS]);
+
+  var migratedTabs = getReportTabs();
+  if (!migratedTabs.length) return; // nothing to migrate — leave it empty
+  var migratedRecipients = getReportRecipients().join(', ');
+  var rows = migratedTabs.map(function (tab) {
+    // Named 'Status Report' (not 'Report Generator', the app's own
+    // landing-screen category name) specifically because the email
+    // subject line uses config.name as its prefix now — this is what
+    // keeps the migrated default's subject text byte-for-byte identical
+    // to what it's always been, so nobody's inbox filter/rule keyed on
+    // "Status Report" silently breaks the first time this runs.
+    return ['Status Report', tab, '', migratedRecipients, 'Friday', 23, 'TRUE'];
+  });
+  sheet.getRange(2, 1, rows.length, REPORT_CONFIGS_COLUMNS.length).setValues(rows);
+  // The migrated config already carries the old fixed Friday/23
+  // schedule — set up the new hourly dispatcher (and retire the old
+  // fixed trigger it replaces) right away, in the same breath as the
+  // migration itself, rather than waiting on someone to open Manage and
+  // hit Save first. See ensureScheduledReportsTrigger_'s own comment for
+  // why this is one shared trigger, not one per config.
+  ensureScheduledReportsTrigger_();
+}
+
+/** Every report config, grouped from the flat sheet rows into
+ * {name, tabs: [{tab, fields}], recipients, scheduleDay, scheduleHour,
+ * enabled} objects, in the sheet's own row order (first-seen ConfigName
+ * order, tabs in the order their rows appear). `fields` is [] for "every
+ * column on that tab" (a blank Fields cell), or the explicit allowlist
+ * otherwise. Config-level fields (Recipients/Schedule/Enabled) are read
+ * off that config's FIRST row — every row for the same config is
+ * expected to repeat the same values, same as how a duplicate-detection
+ * problem would show up in Field Types if they ever drifted, but nothing
+ * here currently guards against that beyond the Manage screen always
+ * writing them consistently in the first place. */
+function getReportConfigs() {
+  ensureReportConfigsTab();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(REPORT_CONFIGS_TAB_NAME);
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return [];
+  var values = sheet.getRange(2, 1, lastRow - 1, REPORT_CONFIGS_COLUMNS.length).getValues();
+  var byName = {};
+  var order = [];
+  values.forEach(function (row) {
+    var name = String(row[0]).trim();
+    var tab = String(row[1]).trim();
+    if (!name || !tab) return;
+    if (!byName[name]) {
+      byName[name] = {
+        name: name,
+        tabs: [],
+        recipients: String(row[3]).split(',').map(function (s) { return s.trim(); }).filter(Boolean),
+        scheduleDay: String(row[4]).trim(),
+        scheduleHour: row[5] === '' || row[5] === null ? null : Number(row[5]),
+        enabled: String(row[6]).trim().toUpperCase() === 'TRUE',
+      };
+      order.push(name);
+    }
+    var fields = String(row[2]).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    byName[name].tabs.push({ tab: tab, fields: fields });
+  });
+  return order.map(function (name) { return byName[name]; });
+}
+
+/** One config by name, or the first one if `name` is blank/not found —
+ * same "no name given, use whatever's first" default every report
+ * action (sendReportNow/downloadReport/sendTestReport) falls back to for
+ * anyone not yet sending an explicit configName, so an org with exactly
+ * one report (the common case) never has to think about this at all. */
+function getReportConfigByName_(name) {
+  var configs = getReportConfigs();
+  if (!configs.length) return null;
+  if (!name) return configs[0];
+  var match = configs.filter(function (c) { return c.name === name; })[0];
+  return match || configs[0];
+}
+
+/** Replaces every row on _ReportConfigs — same wholesale-replace shape
+ * as writeFieldSchemaMap/writeOptionsMap. Takes the same structured
+ * shape getReportConfigs() returns, flattens back into one row per
+ * (ConfigName, Tab). A config with no tabs, or a blank name, is dropped
+ * rather than written as a broken row. */
+function writeReportConfigs(configs) {
+  ensureReportConfigsTab();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(REPORT_CONFIGS_TAB_NAME);
+  var rows = [];
+  (configs || []).forEach(function (config) {
+    var name = String(config.name || '').trim();
+    if (!name) return;
+    var recipients = (config.recipients || []).join(', ');
+    var scheduleDay = String(config.scheduleDay || '').trim();
+    var scheduleHour = config.scheduleHour === '' || config.scheduleHour == null ? '' : Number(config.scheduleHour);
+    var enabled = config.enabled ? 'TRUE' : 'FALSE';
+    (config.tabs || []).forEach(function (t) {
+      var tab = String(t.tab || '').trim();
+      if (!tab) return;
+      var fields = (t.fields || []).join(', ');
+      rows.push([name, tab, fields, recipients, scheduleDay, scheduleHour, enabled]);
+    });
+  });
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, REPORT_CONFIGS_COLUMNS.length).clearContent();
+  if (rows.length) sheet.getRange(2, 1, rows.length, REPORT_CONFIGS_COLUMNS.length).setValues(rows);
+  ensureScheduledReportsTrigger_();
+}
+
+// -------------------- configurable per-config scheduling --------------------
+//
+// Deliberately ONE trigger, shared by every config that has a schedule,
+// rather than a separate trigger per config. A per-config trigger would
+// mean creating/updating/deleting an actual ScriptApp trigger every
+// single time a schedule changes in the Manage screen — real risk of
+// orphaned triggers left behind if a config gets renamed or removed
+// (nothing left to tell the old trigger to clean itself up), on top of
+// Apps Script's own per-project trigger count limit. This way there's
+// nothing to keep in sync at all: the trigger itself never changes,
+// only what runScheduledReports_() finds in _ReportConfigs when it
+// fires does — so editing/adding/removing a config's schedule just
+// takes effect on the next hourly check, with zero trigger management.
+var SCHEDULED_REPORTS_TRIGGER_FN = 'runScheduledReports_';
+
+/** Idempotent — a no-op if the trigger already exists, never a
+ * duplicate. Called from saveReportConfigs so turning on a schedule for
+ * the first time (or after every config was previously manual-only)
+ * doesn't need a separate "now go set this up" step anywhere else -
+ * same self-healing spirit as every ensure*Tab() in this file, just for
+ * a trigger instead of a sheet. Uses the SAME script.scriptapp OAuth
+ * scope Weekly Connect's original trigger design already required (see
+ * appsscript.json) - already granted from that one-time
+ * re-authorization, so this doesn't need it done again. */
+function ensureScheduledReportsTrigger_() {
+  var existingTriggers = ScriptApp.getProjectTriggers();
+  var exists = existingTriggers.some(function (t) {
+    return t.getHandlerFunction() === SCHEDULED_REPORTS_TRIGGER_FN;
+  });
+  if (!exists) {
+    ScriptApp.newTrigger(SCHEDULED_REPORTS_TRIGGER_FN).timeBased().everyHours(1).create();
+  }
+  // The OLD fixed Friday-11pm trigger (scheduledCompileAndSendReport,
+  // from setupTriggers()) is now fully superseded by the hourly
+  // dispatcher above — the migrated "Status Report" config already has
+  // that exact same Friday/23 schedule, so leaving the old trigger in
+  // place would send the SAME report TWICE every Friday, not just be
+  // redundant. Removed here in code, not left for a manual
+  // setupTriggers() re-run, so this can't sit in a double-sending state
+  // waiting on someone to notice. setupTriggers() itself no longer
+  // creates this one either, going forward — see its own comment.
+  existingTriggers.forEach(function (t) {
+    if (t.getHandlerFunction() === 'scheduledCompileAndSendReport') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
+
+/** Fired roughly hourly — Apps Script's own time-based triggers have
+ * some natural jitter and aren't guaranteed to fire at exactly :00, so
+ * this checks "does the current hour match" rather than needing
+ * exact-minute precision. Sends every enabled config whose
+ * ScheduleDay/ScheduleHour matches right now; a config with no schedule
+ * set (blank ScheduleDay or ScheduleHour) is manual-only and never
+ * matches here, same as it working today via the widget's own "Send
+ * Report Now" only. Each config's send is wrapped in its own try/catch —
+ * one failing (a bad recipient address, anything) should never skip the
+ * rest, same reasoning as Weekly Connect's multi-group Teams posting. */
+function runScheduledReports_() {
+  var now = new Date();
+  var tz = Session.getScriptTimeZone();
+  var currentDay = Utilities.formatDate(now, tz, 'EEEE'); // 'Monday', 'Tuesday', ...
+  var currentHour = Number(Utilities.formatDate(now, tz, 'H'));
+
+  getReportConfigs().forEach(function (config) {
+    if (!config.enabled) return;
+    if (!config.scheduleDay || config.scheduleHour === null || isNaN(config.scheduleHour)) return;
+    if (config.scheduleDay !== currentDay) return;
+    if (config.scheduleHour !== currentHour) return;
+    try {
+      compileAndSendReport(null, config.name);
+    } catch (err) {
+      Logger.log('runScheduledReports_ failed for config "' + config.name + '": ' + err);
+    }
+  });
 }
 
 function jsonOut(obj) {

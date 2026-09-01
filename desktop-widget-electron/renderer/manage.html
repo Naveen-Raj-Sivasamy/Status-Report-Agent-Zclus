@@ -86,6 +86,10 @@
   .group-header input { flex: 1; }
   .opt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
   .opt-row input { flex: 1; }
+  .chip-group { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+  button.chip { background: rgba(255,255,255,0.1); color: #e8c9cf; border: 1px solid rgba(255,255,255,0.25); padding: 4px 10px; border-radius: 999px; font-size: 11.5px; }
+  button.chip:hover { border-color: rgba(255,255,255,0.5); color: #ffffff; }
+  button.chip.selected { background: #ffc633; color: #5a1f2a; border-color: #ffc633; font-weight: 600; }
   .fs-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
   .fs-row select, .fs-row input { flex: 1 1 110px; min-width: 90px; }
   .row-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
@@ -212,21 +216,14 @@
     </div>
 
     <div class="section">
-      <h3>Report Settings</h3>
-      <p class="hint">Which tabs feed the Friday report, which tabs stay hidden from the app (still usable directly in the Sheet), and who gets emailed.</p>
+      <h3>App Settings</h3>
+      <p class="hint">Which tabs stay hidden from the app (still usable directly in the Sheet), and the Friday 6pm reminder's recipients/Teams webhook. Which tabs/fields/recipients feed an actual report now lives in "Report Configs" below — a report can be its own thing entirely, not tied to this section.</p>
 
-      <div class="field-label">Tabs included in the Friday report</div>
-      <div class="cat-tabs" id="report-tabs-checks"></div>
-
-      <div class="field-label" style="margin-top:14px;">Tabs hidden from the app</div>
+      <div class="field-label">Tabs hidden from the app</div>
       <div class="cat-tabs" id="hidden-tabs-checks"></div>
 
-      <div class="field-label" style="margin-top:14px;">Report recipients (weekly emailed report)</div>
-      <div id="report-recipients-rows"></div>
-      <button class="icon-btn" type="button" id="add-report-recipient-btn">+ Add email</button>
-
       <div class="field-label" style="margin-top:14px;">Reminder recipients (Friday 6pm nudge)</div>
-      <p class="hint" style="margin: -2px 0 6px;">Leave empty to reuse the report recipients above.</p>
+      <p class="hint" style="margin: -2px 0 6px;">Leave empty to reuse whichever report's recipients would otherwise apply.</p>
       <div id="reminder-recipients-rows"></div>
       <button class="icon-btn" type="button" id="add-reminder-recipient-btn">+ Add email</button>
 
@@ -235,10 +232,22 @@
       <input id="teams-webhook-url" type="text" placeholder="https://..." style="width:100%;" />
 
       <div class="row-actions">
-        <button id="save-report-settings-btn">Save Report Settings</button>
+        <button id="save-report-settings-btn">Save App Settings</button>
       </div>
       <div class="err" id="report-settings-err"></div>
       <div class="ok" id="report-settings-ok"></div>
+    </div>
+
+    <div class="section">
+      <h3>Report Configs</h3>
+      <p class="hint">As many independent reports as you need — each with its own tabs, its own selected columns per tab, its own recipients, and (optionally) its own auto-send day/time. An org with just the one report only ever sees the one card below; add another any time a different team/category needs its own report with a different audience.</p>
+      <div id="report-configs"></div>
+      <div class="row-actions">
+        <button class="secondary" id="add-report-config-btn">+ Add report</button>
+        <button id="save-report-configs-btn">Save Report Configs</button>
+      </div>
+      <div class="err" id="report-configs-err"></div>
+      <div class="ok" id="report-configs-ok"></div>
     </div>
 
     <div class="section">
@@ -271,8 +280,10 @@
   let optionsMap = {};
   let fieldSchemaMap = {};
   let categoriesMap = {};
-  let allTabs = []; // every real tab, including currently-hidden ones — Report Settings only
-  let reportSettings = { reportTabs: [], hiddenTabs: [], reportRecipients: [], reminderRecipients: [], teamsWebhookUrl: '' };
+  let allTabs = []; // every real tab, including currently-hidden ones — Report Settings/Report Configs both need this
+  let reportSettings = { hiddenTabs: [], reminderRecipients: [], teamsWebhookUrl: '' };
+  // [{name, tabs: [{tab, fields: [...]}], recipients: [...], scheduleDay, scheduleHour, enabled}, ...]
+  let reportConfigs = [];
   let connectGroups = []; // [{name, webhookUrl}, ...]
 
   // Mirrors _FieldSchema's actual supported Type values exactly — see
@@ -310,12 +321,13 @@
     document.getElementById('gate').classList.add('hidden');
     document.getElementById('content').classList.remove('hidden');
     renderCompareTable(); // static — doesn't need the fetches below
-    const [tabsRes, optsRes, fsRes, catRes, reportRes, groupsRes] = await Promise.all([
+    const [tabsRes, optsRes, fsRes, catRes, reportRes, configsRes, groupsRes] = await Promise.all([
       window.statusApp.getTabs(),
       window.statusApp.getOptions(),
       window.statusApp.getFieldSchema(),
       window.statusApp.getCategories(),
       window.statusApp.getReportSettings(),
+      window.statusApp.getReportConfigs(),
       window.statusApp.getConnectGroups(),
     ]);
     liveTabs = (tabsRes && tabsRes.tabs) || [];
@@ -324,11 +336,13 @@
     categoriesMap = (catRes && catRes.categories) || {};
     allTabs = (reportRes && reportRes.allTabs) || [];
     reportSettings = (reportRes && reportRes.reportSettings) || reportSettings;
+    reportConfigs = (configsRes && configsRes.configs) || [];
     connectGroups = (groupsRes && groupsRes.groups) || [];
     renderOptions();
     renderFieldSchema();
     renderCategories();
     renderReportSettings();
+    renderReportConfigs();
     renderConnectGroups();
   }
 
@@ -763,49 +777,250 @@
     // allTabs, not liveTabs — a currently-hidden tab needs to be checkable
     // here too (that's how you un-hide it), and liveTabs never includes
     // one (see getTabs()/listVisibleTabs() in Code.gs).
-    const reportTabsSelected = new Set(reportSettings.reportTabs || []);
     const hiddenTabsSelected = new Set(reportSettings.hiddenTabs || []);
-    const reportTabsContainer = document.getElementById('report-tabs-checks');
     const hiddenTabsContainer = document.getElementById('hidden-tabs-checks');
-    reportTabsContainer.innerHTML = '';
     hiddenTabsContainer.innerHTML = '';
     allTabs.forEach((t) => {
-      reportTabsContainer.appendChild(buildTabCheckbox(t, reportTabsSelected.has(t)));
       hiddenTabsContainer.appendChild(buildTabCheckbox(t, hiddenTabsSelected.has(t)));
     });
 
-    const reportRecipientsContainer = document.getElementById('report-recipients-rows');
     const reminderRecipientsContainer = document.getElementById('reminder-recipients-rows');
-    reportRecipientsContainer.innerHTML = '';
     reminderRecipientsContainer.innerHTML = '';
-    (reportSettings.reportRecipients || []).forEach((e) => reportRecipientsContainer.appendChild(buildEmailRow(e)));
     (reportSettings.reminderRecipients || []).forEach((e) => reminderRecipientsContainer.appendChild(buildEmailRow(e)));
 
     document.getElementById('teams-webhook-url').value = reportSettings.teamsWebhookUrl || '';
   }
 
-  document.getElementById('add-report-recipient-btn').addEventListener('click', () => {
-    document.getElementById('report-recipients-rows').appendChild(buildEmailRow(''));
-  });
   document.getElementById('add-reminder-recipient-btn').addEventListener('click', () => {
     document.getElementById('reminder-recipients-rows').appendChild(buildEmailRow(''));
   });
 
   document.getElementById('save-report-settings-btn').addEventListener('click', async () => {
     const settings = {
-      reportTabs: Array.from(document.querySelectorAll('#report-tabs-checks input:checked')).map((c) => c.value),
       hiddenTabs: Array.from(document.querySelectorAll('#hidden-tabs-checks input:checked')).map((c) => c.value),
-      reportRecipients: Array.from(document.querySelectorAll('#report-recipients-rows input')).map((i) => i.value.trim()).filter(Boolean),
       reminderRecipients: Array.from(document.querySelectorAll('#reminder-recipients-rows input')).map((i) => i.value.trim()).filter(Boolean),
       teamsWebhookUrl: document.getElementById('teams-webhook-url').value.trim(),
     };
     await saveSection('save-report-settings-btn', 'report-settings-err', 'report-settings-ok', () => window.statusApp.saveReportSettings(settings));
-    reportSettings = settings;
-    // Field Types / Categories above build their Tab dropdowns/checkboxes
-    // from liveTabs — keep it in sync so a tab just hidden (or un-hidden)
-    // here is reflected the next time either of those adds a new row,
-    // without needing a full reload.
+    reportSettings = Object.assign({}, reportSettings, settings);
+    // Field Types / Categories / Report Configs all build their Tab
+    // dropdowns/checkboxes from liveTabs — keep it in sync so a tab just
+    // hidden (or un-hidden) here is reflected the next time any of them
+    // adds a new row, without needing a full reload.
     liveTabs = allTabs.filter((t) => !settings.hiddenTabs.includes(t));
+  });
+
+  // -------------------- Report Configs --------------------
+  //
+  // Each config is its own card: a name, one or more Tab+Fields rows (a
+  // tab picked from a real dropdown, its columns offered as chips fetched
+  // live via getColumns — same "real picker, not free text" pattern
+  // Field Types already uses for Column, so a typo can't silently exclude
+  // a field), a recipients list, and an optional schedule. Saving sends
+  // the whole set back (same "replace everything" shape as every other
+  // section here) — writeReportConfigs on the backend handles turning
+  // this back into flat (ConfigName, Tab) rows.
+
+  function buildScheduleDaySelect(selected) {
+    const sel = document.createElement('select');
+    sel.className = 'rc-schedule-day';
+    [['', 'Manual only'], ['Sunday', 'Sunday'], ['Monday', 'Monday'], ['Tuesday', 'Tuesday'],
+     ['Wednesday', 'Wednesday'], ['Thursday', 'Thursday'], ['Friday', 'Friday'], ['Saturday', 'Saturday']]
+      .forEach(([value, label]) => sel.appendChild(new Option(label, value)));
+    sel.value = selected || '';
+    return sel;
+  }
+
+  function buildScheduleHourSelect(selected) {
+    const sel = document.createElement('select');
+    sel.className = 'rc-schedule-hour';
+    sel.appendChild(new Option('--', ''));
+    for (let h = 0; h < 24; h++) {
+      const label = h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`;
+      sel.appendChild(new Option(label, h));
+    }
+    sel.value = selected === null || selected === undefined ? '' : String(selected);
+    return sel;
+  }
+
+  // One Tab+Fields row within a config card. Fields are chips fetched
+  // live from that tab's real columns (getColumns) — selecting the tab
+  // populates them; switching tabs mid-edit resets the selection rather
+  // than trying to carry over columns that may not even exist on the
+  // newly picked tab.
+  function buildReportConfigTabRow(tab, fields) {
+    const row = document.createElement('div');
+    row.className = 'group rc-tab-row';
+    row.style.cssText = 'background:rgba(255,255,255,0.1); margin-bottom:8px;';
+
+    const header = document.createElement('div');
+    header.className = 'group-header';
+    const tabSel = document.createElement('select');
+    tabSel.className = 'rc-tab-select';
+    tabSel.style.flex = '1';
+    tabSel.appendChild(new Option('— tab —', ''));
+    allTabs.forEach((t) => tabSel.appendChild(new Option(t, t)));
+    tabSel.value = tab || '';
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'icon-btn';
+    removeBtn.textContent = '✕';
+    removeBtn.title = 'Remove this tab from the report';
+    removeBtn.onclick = () => row.remove();
+    header.appendChild(tabSel);
+    header.appendChild(removeBtn);
+    row.appendChild(header);
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:10.5px; color:#e8c9cf; margin:6px 0 4px;';
+    hint.textContent = 'Columns to include — none selected means every column on this tab.';
+    row.appendChild(hint);
+
+    const chipGroup = document.createElement('div');
+    chipGroup.className = 'chip-group rc-fields-chips';
+    row.appendChild(chipGroup);
+
+    async function populateFieldChips(selectedTab, selectedFields) {
+      chipGroup.innerHTML = '';
+      if (!selectedTab) return;
+      let cols = [];
+      try {
+        const res = await window.statusApp.getColumns(selectedTab);
+        cols = (res && res.columns) || [];
+      } catch {
+        cols = [];
+      }
+      const selectedSet = new Set(selectedFields || []);
+      cols.forEach((col) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip' + (selectedSet.has(col) ? ' selected' : '');
+        chip.textContent = col;
+        chip.dataset.field = col;
+        chip.onclick = () => chip.classList.toggle('selected');
+        chipGroup.appendChild(chip);
+      });
+    }
+    populateFieldChips(tab, fields);
+    tabSel.onchange = () => populateFieldChips(tabSel.value, []);
+
+    return row;
+  }
+
+  function buildReportConfigCard(config) {
+    config = config || { name: '', tabs: [], recipients: [], scheduleDay: '', scheduleHour: null, enabled: true };
+    const card = document.createElement('div');
+    card.className = 'group rc-config-card';
+
+    const header = document.createElement('div');
+    header.className = 'group-header';
+    const nameInput = document.createElement('input');
+    nameInput.className = 'rc-name';
+    nameInput.placeholder = 'Report name (e.g. Status Report)';
+    nameInput.value = config.name || '';
+    nameInput.style.flex = '2';
+    const enabledLabel = document.createElement('label');
+    enabledLabel.style.cssText = 'display:flex; align-items:center; gap:4px; font-size:11px; white-space:nowrap;';
+    const enabledCb = document.createElement('input');
+    enabledCb.type = 'checkbox';
+    enabledCb.className = 'rc-enabled';
+    enabledCb.checked = config.enabled !== false;
+    enabledLabel.appendChild(enabledCb);
+    enabledLabel.appendChild(document.createTextNode(' Enabled'));
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'icon-btn';
+    deleteBtn.textContent = '✕ Remove';
+    deleteBtn.onclick = () => card.remove();
+    header.appendChild(nameInput);
+    header.appendChild(enabledLabel);
+    header.appendChild(deleteBtn);
+    card.appendChild(header);
+
+    const tabsLabel = document.createElement('div');
+    tabsLabel.className = 'field-label';
+    tabsLabel.style.marginTop = '10px';
+    tabsLabel.textContent = 'Tabs & columns included';
+    card.appendChild(tabsLabel);
+    const tabsContainer = document.createElement('div');
+    tabsContainer.className = 'rc-tabs';
+    (config.tabs && config.tabs.length ? config.tabs : [{ tab: '', fields: [] }]).forEach((t) => {
+      tabsContainer.appendChild(buildReportConfigTabRow(t.tab, t.fields));
+    });
+    card.appendChild(tabsContainer);
+    const addTabBtn = document.createElement('button');
+    addTabBtn.type = 'button';
+    addTabBtn.className = 'icon-btn';
+    addTabBtn.textContent = '+ Add tab';
+    addTabBtn.onclick = () => tabsContainer.appendChild(buildReportConfigTabRow('', []));
+    card.appendChild(addTabBtn);
+
+    const recipLabel = document.createElement('div');
+    recipLabel.className = 'field-label';
+    recipLabel.style.marginTop = '10px';
+    recipLabel.textContent = 'Recipients';
+    card.appendChild(recipLabel);
+    const recipContainer = document.createElement('div');
+    recipContainer.className = 'rc-recipients';
+    (config.recipients && config.recipients.length ? config.recipients : ['']).forEach((e) => {
+      recipContainer.appendChild(buildEmailRow(e));
+    });
+    card.appendChild(recipContainer);
+    const addRecipBtn = document.createElement('button');
+    addRecipBtn.type = 'button';
+    addRecipBtn.className = 'icon-btn';
+    addRecipBtn.textContent = '+ Add email';
+    addRecipBtn.onclick = () => recipContainer.appendChild(buildEmailRow(''));
+    card.appendChild(addRecipBtn);
+
+    const scheduleLabel = document.createElement('div');
+    scheduleLabel.className = 'field-label';
+    scheduleLabel.style.marginTop = '10px';
+    scheduleLabel.textContent = 'Auto-send schedule (optional)';
+    card.appendChild(scheduleLabel);
+    const scheduleRow = document.createElement('div');
+    scheduleRow.className = 'opt-row';
+    scheduleRow.appendChild(buildScheduleDaySelect(config.scheduleDay));
+    scheduleRow.appendChild(buildScheduleHourSelect(config.scheduleHour));
+    card.appendChild(scheduleRow);
+    const scheduleHint = document.createElement('p');
+    scheduleHint.className = 'hint';
+    scheduleHint.style.cssText = 'margin:4px 0 0;';
+    scheduleHint.textContent = 'Checked roughly hourly, not to the exact minute — a send may land a little before or after the chosen hour.';
+    card.appendChild(scheduleHint);
+
+    return card;
+  }
+
+  function renderReportConfigs() {
+    const container = document.getElementById('report-configs');
+    container.innerHTML = '';
+    reportConfigs.forEach((c) => container.appendChild(buildReportConfigCard(c)));
+  }
+
+  document.getElementById('add-report-config-btn').addEventListener('click', () => {
+    document.getElementById('report-configs').appendChild(buildReportConfigCard(null));
+  });
+
+  document.getElementById('save-report-configs-btn').addEventListener('click', async () => {
+    const cards = Array.from(document.querySelectorAll('#report-configs .rc-config-card'));
+    const configs = cards.map((card) => {
+      const name = card.querySelector('.rc-name').value.trim();
+      const enabled = card.querySelector('.rc-enabled').checked;
+      const tabs = Array.from(card.querySelectorAll('.rc-tab-row')).map((row) => {
+        const tab = row.querySelector('.rc-tab-select').value.trim();
+        const fields = Array.from(row.querySelectorAll('.rc-fields-chips .chip.selected')).map((c) => c.dataset.field);
+        return { tab, fields };
+      }).filter((t) => t.tab);
+      const recipients = Array.from(card.querySelectorAll('.rc-recipients input')).map((i) => i.value.trim()).filter(Boolean);
+      const scheduleDay = card.querySelector('.rc-schedule-day').value;
+      const scheduleHourRaw = card.querySelector('.rc-schedule-hour').value;
+      const scheduleHour = scheduleHourRaw === '' ? null : Number(scheduleHourRaw);
+      return { name, tabs, recipients, scheduleDay, scheduleHour, enabled };
+    }).filter((c) => c.name && c.tabs.length);
+    const saved = await saveSection('save-report-configs-btn', 'report-configs-err', 'report-configs-ok', () => window.statusApp.saveReportConfigs(configs));
+    reportConfigs = configs;
+    if (saved) renderReportConfigs(); // same "re-group after a successful save" reasoning as Field Types
   });
 
   // -------------------- Connect Groups --------------------

@@ -423,9 +423,18 @@ ipcMain.handle('submit-entry', async (event, { tab, values }) => {
     pendingSubmitTabs.delete(tab);
   }
 });
-ipcMain.handle('send-report-now', async (_e, range) =>
-  apiPostBody(Object.assign({ action: 'sendReportNow' }, range || {}))
+ipcMain.handle('send-report-now', async (_e, { range, configName } = {}) =>
+  apiPostBody(Object.assign({ action: 'sendReportNow', configName }, range || {}))
 );
+// Report Configs — the generalized, multi-report replacement for the old
+// single hardcoded ReportTabs/ReportRecipients setup. Same token-gated
+// doPost reasoning as saveOptions/saveFieldSchema/saveReportSettings.
+ipcMain.handle('get-report-configs', async () => apiPostBody({ action: 'getReportConfigs' }));
+ipcMain.handle('save-report-configs', async (_e, configs) => {
+  const result = await apiPostBody({ action: 'saveReportConfigs', configs });
+  tabsCache = null; // a config's own tab list isn't the widget's tab list, but cheap/safe to refresh alongside it
+  return result;
+});
 ipcMain.handle('clear-cache', async () => {
   const result = await apiPostBody({ action: 'clearCache' });
   // Clearing just the server-side cache isn't enough on its own — this
@@ -496,8 +505,8 @@ ipcMain.handle('update-weekly-connect-ticket', async (_e, { ticketId, status, co
 ipcMain.handle('post-weekly-connect-to-teams', async (_e, { group, range }) =>
   apiPostBody(Object.assign({ action: 'postWeeklyConnectToTeamsNow', group }, range || {})).catch((err) => ({ ok: false, error: err.message }))
 );
-ipcMain.handle('download-report', async (_e, range) => {
-  const data = await apiPostBody(Object.assign({ action: 'downloadReport' }, range || {}));
+ipcMain.handle('download-report', async (_e, { range, configName } = {}) => {
+  const data = await apiPostBody(Object.assign({ action: 'downloadReport', configName }, range || {}));
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: 'Save Report',
     defaultPath: data.fileName,

@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('statusApp', {
   downloadReport: (range) => ipcRenderer.invoke('download-report', range),
   getNextNumber: (tab, column) => ipcRenderer.invoke('get-next-number', { tab, column }),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  getAppInfo: () => ipcRenderer.invoke('get-app-info'),
   checkLatestVersion: () => ipcRenderer.invoke('check-latest-version'),
   isUpdateReadyToInstall: () => ipcRenderer.invoke('is-update-ready-to-install'),
   quitAndInstall: () => ipcRenderer.invoke('quit-and-install'),

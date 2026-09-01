@@ -364,8 +364,6 @@
       <button class="secondary" id="cancel-btn">Cancel</button>
       <button class="primary" id="submit-btn">Submit</button>
     </footer>
-
-    <div class="credit">Developed by <a href="#" id="credit-link" class="credit-link">Naveen Raj Sivasamy</a></div>
   </div>
 
 <script src="field-config.js"></script>
@@ -769,10 +767,12 @@
       <button class="tab-btn" id="clear-cache-btn">Refresh tabs &amp; fields (clear cache)</button>
       <button class="tab-btn" id="manage-fields-btn">Manage fields &amp; options</button>
       <button class="tab-btn" id="connection-settings-btn">Change organization connection</button>
+      <button class="tab-btn" id="about-btn">About</button>
       <button class="secondary" id="settings-back-btn" style="width:100%; margin-top:10px;">Back</button>
     `;
 
     document.getElementById('settings-back-btn').onclick = showTabPicker;
+    document.getElementById('about-btn').onclick = () => showAbout();
     // Opens the same password-gated Connect window used on first run —
     // it handles its own password prompt/editing entirely on its own, so
     // there's nothing further to do here once it's open.
@@ -808,6 +808,40 @@
         });
       }
     };
+  }
+
+  // Replaces the old permanent "Developed by" footer, which sat at the
+  // bottom of every single screen whether anyone cared or not — version
+  // and credit info now live in one place someone actually goes looking
+  // for it, instead of being shown unconditionally forever.
+  async function showAbout() {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = 'About';
+    els.main.style.minHeight = '';
+    showLoading('Loading…');
+    try {
+      const info = await window.statusApp.getAppInfo();
+      const firstUsed = new Date(info.firstLaunchDate);
+      const firstUsedLabel = isNaN(firstUsed.getTime()) ? 'Unknown' : firstUsed.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+      els.main.innerHTML = `
+        <div class="section" style="background:var(--surface); border-radius:12px; padding:16px; margin-bottom:10px;">
+          <div class="field-label" style="color:var(--text-dim);">Version</div>
+          <div style="font-size:14px; font-weight:700; color:var(--text); margin-bottom:12px;">v${escapeHtml(info.version)}</div>
+          <div class="field-label" style="color:var(--text-dim);">First used on this computer</div>
+          <div style="font-size:14px; font-weight:700; color:var(--text);">${escapeHtml(firstUsedLabel)}</div>
+        </div>
+        <p class="login-hint" style="text-align:center;">Developed by <a href="#" id="about-credit-link" style="color:inherit; text-decoration:underline; cursor:pointer;">Naveen Raj Sivasamy</a></p>
+        <button class="secondary" id="about-back-btn" style="width:100%; margin-top:8px;">Back</button>
+      `;
+      document.getElementById('about-credit-link').onclick = (e) => {
+        e.preventDefault();
+        window.statusApp.openExternal('https://www.linkedin.com/in/naveen-raj-sivasamy-603826196');
+      };
+      document.getElementById('about-back-btn').onclick = showSettings;
+    } catch (err) {
+      showError(err.message || String(err), showAbout);
+    }
   }
 
   // Which category's tab list is currently showing, if any — so the many
@@ -1743,10 +1777,6 @@
 
   els.closeBtn.onclick = () => window.statusApp.hideWindow();
   els.settingsBtn.onclick = () => showSettings();
-  document.getElementById('credit-link').onclick = (e) => {
-    e.preventDefault();
-    window.statusApp.openExternal('https://www.linkedin.com/in/naveen-raj-sivasamy-603826196');
-  };
   els.viewReportBtn.onclick = () => window.statusApp.openSheet();
   els.submitReportBtn.onclick = () => showReportOptions();
 

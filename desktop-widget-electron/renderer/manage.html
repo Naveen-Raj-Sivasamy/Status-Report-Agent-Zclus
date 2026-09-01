@@ -332,6 +332,11 @@
     renderConnectGroups();
   }
 
+  // Returns whether the save actually succeeded — most sections don't
+  // need this (whatever they were editing is already showing the values
+  // that were just saved), but Field Types does: a successful save can
+  // change which tab a field visually belongs under, so it needs to know
+  // when to re-render. See the .fs-row save handler below.
   async function saveSection(btnId, errId, okId, action) {
     const btn = document.getElementById(btnId);
     const errEl = document.getElementById(errId);
@@ -345,8 +350,10 @@
       const result = await action();
       if (!result || result.ok === false) throw new Error((result && result.error) || 'Save failed.');
       okEl.textContent = 'Saved.';
+      return true;
     } catch (err) {
       errEl.textContent = err.message || String(err);
+      return false;
     } finally {
       btn.disabled = false;
       btn.textContent = original;
@@ -627,18 +634,37 @@
   document.getElementById('save-fs-btn').addEventListener('click', async () => {
     const rows = Array.from(document.querySelectorAll('#fs-rows .fs-row'));
     const map = {};
+    // A duplicate (same Tab+Column on two rows) used to save silently —
+    // whichever row happened to build into `map` last just overwrote the
+    // other with no warning, so the first row's edits could vanish
+    // without anyone noticing. Catch that here instead, before it saves.
+    const seen = new Set();
+    let duplicate = null;
     rows.forEach((r) => {
       const tab = r.querySelector('.fs-tab').value.trim();
       const column = r.querySelector('.fs-col').value.trim();
       const type = r.querySelector('.fs-type').value.trim();
       if (!tab || !column || !type) return;
+      const key = tab + '' + column.toLowerCase();
+      if (seen.has(key)) duplicate = `${column}" on "${tab}`;
+      seen.add(key);
       const optionsKey = r.querySelector('.fs-optkey').value.trim();
       const basedOn = r.querySelector('.fs-basedon').value.trim();
       if (!map[tab]) map[tab] = {};
       map[tab][column] = { type, optionsKey, basedOn };
     });
-    await saveSection('save-fs-btn', 'fs-err', 'fs-ok', () => window.statusApp.saveFieldSchema(map));
+    if (duplicate) {
+      document.getElementById('fs-err').textContent = `"${duplicate}" is listed more than once — remove one before saving, or only the last one will actually be kept.`;
+      return;
+    }
+    const saved = await saveSection('save-fs-btn', 'fs-err', 'fs-ok', () => window.statusApp.saveFieldSchema(map));
     fieldSchemaMap = map;
+    // Re-group by tab now that the save actually went through — a field
+    // just added (always appended at the bottom, tab not chosen yet)
+    // moves to sit with the rest of its real tab's fields immediately,
+    // instead of only showing correctly grouped the next time this
+    // screen is opened fresh.
+    if (saved) renderFieldSchema();
   });
 
   // -------------------- Categories --------------------

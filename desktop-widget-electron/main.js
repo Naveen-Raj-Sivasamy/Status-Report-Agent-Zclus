@@ -476,6 +476,20 @@ ipcMain.handle('download-report', async (_e, range) => {
 ipcMain.handle('get-next-number', async (_e, { tab, column }) => apiGet({ action: 'nextNumber', tab, column }));
 ipcMain.handle('get-your-name', () => config.YOUR_NAME || '');
 ipcMain.handle('get-app-version', () => APP_VERSION);
+// Stamped once, the first time it's ever read — covers both a genuinely
+// new install and an existing one from before this existed (which just
+// gets "first seen" from now on, not literally accurate to their real
+// original install day, but close enough for an About screen and better
+// than nothing). Powers the About screen replacing the old permanent
+// "Developed by" footer.
+ipcMain.handle('get-app-info', () => {
+  var saved = loadUserConfig();
+  if (!saved.firstLaunchDate) {
+    saved = Object.assign({}, saved, { firstLaunchDate: new Date().toISOString() });
+    saveUserConfig({ firstLaunchDate: saved.firstLaunchDate });
+  }
+  return { version: APP_VERSION, firstLaunchDate: saved.firstLaunchDate };
+});
 ipcMain.handle('check-latest-version', async () => {
   try {
     // Unlike a save, nobody is staring at a "Saving..." button waiting on

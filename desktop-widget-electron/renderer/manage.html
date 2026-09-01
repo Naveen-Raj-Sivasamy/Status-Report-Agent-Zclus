@@ -33,7 +33,18 @@
     -webkit-app-region: no-drag; /* stay clickable inside the draggable title bar */
   }
   .titlebar-close:hover { background: rgba(255,255,255,0.24); }
-  .scroll-area { flex: 1 1 auto; overflow-y: auto; padding: 12px 24px 32px; box-sizing: border-box; }
+  /* -webkit-app-region: no-drag here is the actual fix for "scrollbar
+     doesn't work" — body above is a drag region (see its own comment),
+     and this content area was never excluded from it. Electron drag
+     regions swallow mouse-wheel/scroll input over anything marked
+     draggable, not just click-drag — so scrolling over any of this
+     area's plain text/headings (most of it) was being eaten by the
+     window-drag handler instead of reaching the scroll. min-height: 0
+     turned out NOT to be the cause (verified: modern browsers already
+     treat a flex item's min-height as 0 once it has overflow-y: auto —
+     it's redundant here, kept only as documentation of what was ruled
+     out). Dragging the window still works via the titlebar strip above. */
+  .scroll-area { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 24px 32px; box-sizing: border-box; -webkit-app-region: no-drag; }
   h2 { margin: 0 0 6px; font-size: 17px; font-weight: 700; }
   h3 { margin: 0 0 4px; font-size: 14px; font-weight: 700; color: #ffe9c7; }
   p.hint { margin: 0 0 14px; font-size: 11.5px; color: #f3d9de; font-weight: 600; line-height: 1.4; }

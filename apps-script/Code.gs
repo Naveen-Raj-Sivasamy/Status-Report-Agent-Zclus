@@ -1644,29 +1644,73 @@ function getCurrentConnectWeekRange() {
   return { start: weekStart, end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59, 59) };
 }
 
-/** Wraps `text` (already the same lightweight-Markdown shape richtext
- * fields produce — bold markers, bullet lines, [link](url) — which
- * Adaptive Cards' TextBlock understands a limited version of natively)
- * into a minimal Adaptive Card — the shape Teams' current "Post to a
- * channel when a webhook request is received" Workflow template (the
- * modern replacement for the old Connectors/Incoming Webhook route — see
- * the README) actually expects, confirmed against a real failure: sending
- * a plain {text: ...} body got back "Property 'type' must be
- * 'AdaptiveCard'" from the flow's Post-card action, which deserializes
- * the request body directly as a card. If your webhook is a genuinely
- * classic Incoming Webhook instead (rare now — Microsoft has been
- * steering everyone toward Workflows), it likely expects the older
- * {text: ...} shape instead; this is the one place to change that back
- * if so. */
-function buildAdaptiveCardPayload_(text) {
+/** Wraps `bodyOrText` into a minimal Adaptive Card — the shape Teams'
+ * current "Post to a channel when a webhook request is received"
+ * Workflow template (the modern replacement for the old Connectors/
+ * Incoming Webhook route — see the README) actually expects, confirmed
+ * against a real failure: sending a plain {text: ...} body got back
+ * "Property 'type' must be 'AdaptiveCard'" from the flow's Post-card
+ * action, which deserializes the request body directly as a card. If
+ * your webhook is a genuinely classic Incoming Webhook instead (rare
+ * now — Microsoft has been steering everyone toward Workflows), it
+ * likely expects the older {text: ...} shape instead; this is the one
+ * place to change that back if so.
+ *
+ * Accepts either a plain string (the Friday reminder's use — wrapped as
+ * one TextBlock, same lightweight-Markdown shape richtext fields produce,
+ * which TextBlock understands a limited version of natively) or a real
+ * Adaptive Card body array (Weekly Connect's structured per-ticket cards
+ * below — FactSet/Container/etc., not just a wall of markdown text). */
+function buildAdaptiveCardPayload_(bodyOrText) {
   return {
     type: 'AdaptiveCard',
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
     version: '1.4',
-    body: [
-      { type: 'TextBlock', text: text, wrap: true },
-    ],
+    body: typeof bodyOrText === 'string'
+      ? [{ type: 'TextBlock', text: bodyOrText, wrap: true }]
+      : bodyOrText,
   };
+}
+
+/** Adaptive Cards' small set of semantic text colors — used to make
+ * Priority readable at a glance without needing real CSS (which Adaptive
+ * Cards don't support at all — no arbitrary styling, only whatever
+ * building blocks the format itself defines). Anything not in this list
+ * (a custom Priority value an org added) just falls back to 'default'
+ * rather than guessing. */
+var PRIORITY_COLOR_MAP_ = { Urgent: 'attention', High: 'attention', Medium: 'warning', Low: 'good' };
+
+/** One ticket's card content — a heading, a color-coded priority line
+ * if set, a FactSet for the other populated fields (aligned label:value
+ * columns, not plain text lines), and the URL as a real markdown link if
+ * present. Wrapped by the caller in a Container per ticket so each
+ * question reads as its own visually separated block instead of a wall
+ * of text run together. */
+function buildTicketCardItems_(t) {
+  var items = [
+    { type: 'TextBlock', text: 'Q' + t['Ticket ID'] + ' — ' + (t['Issue'] || '(no description)'), wrap: true, weight: 'Bolder' },
+  ];
+  if (t['Priority']) {
+    items.push({
+      type: 'TextBlock',
+      text: 'Priority: ' + t['Priority'],
+      wrap: true,
+      size: 'Small',
+      spacing: 'None',
+      color: PRIORITY_COLOR_MAP_[t['Priority']] || 'default',
+    });
+  }
+  var facts = [];
+  ['Requester', 'Owner', 'Site', 'Type'].forEach(function (f) {
+    if (t[f]) facts.push({ title: f, value: String(t[f]) });
+  });
+  if (facts.length) {
+    items.push({ type: 'FactSet', facts: facts, spacing: 'Small' });
+  }
+  if (t['URL']) {
+    items.push({ type: 'TextBlock', text: '[Reference link](' + t['URL'] + ')', wrap: true, size: 'Small', spacing: 'Small' });
+  }
+  return items;
 }
 
 
@@ -1712,31 +1756,30 @@ function postWeeklyConnectToTeams(groupName, range) {
 
   var tz = Session.getScriptTimeZone();
   var rangeLabel = Utilities.formatDate(range.start, tz, 'MMM d') + ' – ' + Utilities.formatDate(range.end, tz, 'MMM d');
-  // Each ticket as its own block: a bold heading line, then every other
-  // populated field on its own line underneath — not just Issue+Requester
-  // squeezed onto one line like before. A field left blank on the ticket
-  // is skipped entirely rather than shown empty.
-  var lines = tickets.map(function (t) {
-    var detailFields = [
-      ['Requester', t['Requester']],
-      ['Owner', t['Owner']],
-      ['Site', t['Site']],
-      ['Type', t['Type']],
-      ['Priority', t['Priority']],
-      ['URL', t['URL']],
-    ].filter(function (f) { return f[1]; });
-    var detailLines = detailFields.map(function (f) { return '**' + f[0] + ':** ' + f[1]; }).join('\n');
-    return '**Q' + t['Ticket ID'] + ' — ' + (t['Issue'] || '(no description)') + '**' +
-      (detailLines ? '\n' + detailLines : '');
-  });
-  var text = '**' + heading + ' — ' + rangeLabel + '**\n\n' +
-    (lines.length ? lines.join('\n\n') : '_Nothing logged in this range._');
+  // Real Adaptive Card structure now, not a wall of markdown text lines —
+  // a heading, then each ticket as its own visually separated Container
+  // (a subtle background box) holding a bold Q#/Issue line, a
+  // color-coded Priority line, a FactSet for the other populated fields
+  // (aligned label:value columns, not plain text lines), and the URL as
+  // a real link. See buildTicketCardItems_'s own comment for why colors
+  // are limited to Adaptive Cards' handful of semantic ones — there's no
+  // real CSS available here at all, this is the actual ceiling.
+  var cardBody = [
+    { type: 'TextBlock', text: heading + ' — ' + rangeLabel, wrap: true, size: 'Medium', weight: 'Bolder' },
+  ];
+  if (!tickets.length) {
+    cardBody.push({ type: 'TextBlock', text: 'Nothing logged in this range.', wrap: true, isSubtle: true, spacing: 'Medium' });
+  } else {
+    tickets.forEach(function (t) {
+      cardBody.push({ type: 'Container', style: 'emphasis', spacing: 'Medium', items: buildTicketCardItems_(t) });
+    });
+  }
 
   try {
     var response = UrlFetchApp.fetch(teamsWebhookUrl, {
       method: 'post',
       contentType: 'application/json',
-      payload: JSON.stringify(buildAdaptiveCardPayload_(text)),
+      payload: JSON.stringify(buildAdaptiveCardPayload_(cardBody)),
       muteHttpExceptions: true, // so a non-2xx response lands here to inspect, instead of throwing
     });
     var statusCode = response.getResponseCode();

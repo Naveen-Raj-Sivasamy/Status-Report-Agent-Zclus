@@ -1639,9 +1639,22 @@ function postWeeklyConnectToTeams(groupName, range) {
 
   var tz = Session.getScriptTimeZone();
   var rangeLabel = Utilities.formatDate(range.start, tz, 'MMM d') + ' – ' + Utilities.formatDate(range.end, tz, 'MMM d');
+  // Each ticket as its own block: a bold heading line, then every other
+  // populated field on its own line underneath — not just Issue+Requester
+  // squeezed onto one line like before. A field left blank on the ticket
+  // is skipped entirely rather than shown empty.
   var lines = tickets.map(function (t) {
-    var who = t['Requester'] ? ' — ' + t['Requester'] : '';
-    return '**Q' + t['Ticket ID'] + '**: ' + (t['Issue'] || '(no description)') + who;
+    var detailFields = [
+      ['Requester', t['Requester']],
+      ['Owner', t['Owner']],
+      ['Site', t['Site']],
+      ['Type', t['Type']],
+      ['Priority', t['Priority']],
+      ['URL', t['URL']],
+    ].filter(function (f) { return f[1]; });
+    var detailLines = detailFields.map(function (f) { return '**' + f[0] + ':** ' + f[1]; }).join('\n');
+    return '**Q' + t['Ticket ID'] + ' — ' + (t['Issue'] || '(no description)') + '**' +
+      (detailLines ? '\n' + detailLines : '');
   });
   var text = '**' + heading + ' — ' + rangeLabel + '**\n\n' +
     (lines.length ? lines.join('\n\n') : '_Nothing logged in this range._');

@@ -1227,6 +1227,13 @@
       });
 
       els.footer.classList.remove('hidden');
+      // Defensive, on top of the success-path fix above: whatever state
+      // submitBtn was left in by anything that happened before this form
+      // opened (a submit that's still technically in flight after Cancel,
+      // some other edge case) never leaks into a form nobody has touched
+      // yet — every fresh form starts clean, no exceptions.
+      els.submitBtn.disabled = false;
+      els.submitBtn.textContent = 'Submit';
       els.cancelBtn.onclick = showTabPicker;
       els.submitBtn.onclick = async () => {
         els.submitBtn.disabled = true;
@@ -1236,6 +1243,14 @@
         try {
           await window.statusApp.submitEntry(tab, values);
           clearDraft(tab); // it actually made it to the sheet — nothing left to restore next time
+          // The catch below already resets these on failure — the success
+          // path never did, so the button stayed stuck at disabled/"Saving…"
+          // forever after every successful submit. Invisible right after a
+          // normal submit (showSuccess hides the footer), but it resurfaced
+          // the next time any form revealed the footer again, looking like
+          // a fresh "stuck on Saving" report on a form nobody had touched yet.
+          els.submitBtn.disabled = false;
+          els.submitBtn.textContent = 'Submit';
           showSuccess(tab);
         } catch (err) {
           els.submitBtn.disabled = false;

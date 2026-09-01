@@ -909,6 +909,12 @@ function toggleWindow() {
   popup.show();
   popup.focus();
   popup.webContents.send('opened');
+  // Also check right when someone actually opens the popup, not just on
+  // the timer below — this is a tray-resident app nobody quits day to
+  // day, so "check every N minutes" alone means whoever's actively using
+  // it right now still has to wait out however much of that window is
+  // left. Catching real activity closes that gap for free.
+  checkForUpdatesInBackground();
 }
 
 // -------------------- floating draggable button --------------------
@@ -1075,7 +1081,14 @@ function startMainApp() {
 
   cleanStaleUpdaterCacheIfVersionChanged(); // clear out any installer left over from the update that got us to this version
   checkForUpdatesInBackground(); // once at launch...
-  setInterval(checkForUpdatesInBackground, 4 * 60 * 60 * 1000); // ...and every 4 hours after, for anyone who leaves the app running for days
+  // ...and every 15 minutes after — was 4 hours, which meant someone who
+  // keeps this tray app running for days (the normal case; almost nobody
+  // quits it) could go most of a workday before ever hearing about a new
+  // version, even one shipped to fix something they're actively hitting.
+  // Checking a public GitHub release feed this often costs nothing
+  // meaningful at this scale. toggleWindow() above also checks the moment
+  // the popup actually opens, so real activity doesn't even wait this long.
+  setInterval(checkForUpdatesInBackground, 15 * 60 * 1000);
 }
 
 app.whenReady().then(() => {

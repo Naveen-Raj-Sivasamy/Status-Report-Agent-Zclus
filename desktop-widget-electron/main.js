@@ -342,18 +342,43 @@ ipcMain.handle('get-categories', async () => {
   }
   return refreshCategoriesCache();
 });
+// Real risk this closes: when a save is genuinely slow (e.g. a large
+// sheet's dependent formulas recalculating on every write — the
+// "always stuck on Saving" reports), clicking Cancel only navigates the
+// UI away — it never actually stops the in-flight request underneath
+// (fetch has no cancellation wired to it). If someone then resubmits
+// the same ticket thinking the first attempt failed, the original one
+// can still land successfully later — a real duplicate row, not a
+// hypothetical one. Refusing a second submit for a tab that already has
+// one in flight closes that gap without needing true request
+// cancellation (which would need its own AbortController plumbed
+// through apiPostBody/callWithRetry — a bigger change than this
+// specific risk warrants).
+const pendingSubmitTabs = new Set();
+
 ipcMain.handle('submit-entry', async (event, { tab, values }) => {
-  const result = await apiPost(tab, values, {
-    onRetry: (attempt, attempts) => {
-      // Let the popup show real progress ("retrying 2/3") instead of a
-      // static "Saving..." that looks frozen while we're still working on it.
-      if (!event.sender.isDestroyed()) {
-        event.sender.send('submit-retry', { attempt: attempt + 1, attempts });
-      }
-    },
-  });
-  refreshColumnsCache(tab); // e.g. so the next "Cleanup Number" reflects this new row right away
-  return result;
+  if (pendingSubmitTabs.has(tab)) {
+    return {
+      ok: false,
+      error: 'A submission for this tab is already in progress — wait for it to finish (or fail) before submitting again, to avoid saving it twice.',
+    };
+  }
+  pendingSubmitTabs.add(tab);
+  try {
+    const result = await apiPost(tab, values, {
+      onRetry: (attempt, attempts) => {
+        // Let the popup show real progress ("retrying 2/3") instead of a
+        // static "Saving..." that looks frozen while we're still working on it.
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('submit-retry', { attempt: attempt + 1, attempts });
+        }
+      },
+    });
+    refreshColumnsCache(tab); // e.g. so the next "Cleanup Number" reflects this new row right away
+    return result;
+  } finally {
+    pendingSubmitTabs.delete(tab);
+  }
 });
 ipcMain.handle('send-report-now', async (_e, range) =>
   apiPostBody(Object.assign({ action: 'sendReportNow' }, range || {}))

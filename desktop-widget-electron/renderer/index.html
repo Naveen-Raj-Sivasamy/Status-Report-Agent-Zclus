@@ -285,6 +285,23 @@
     cursor: pointer; -webkit-app-region: no-drag;
   }
   .wc-filter-btn.active { background: #ffb700; color: #2a2020; }
+  .wc-filter-toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .wc-filter-toggle-btn {
+    background: none; border: none; color: var(--on-brand-dim); font-size: 11.5px;
+    font-weight: 700; padding: 2px 0; cursor: pointer; -webkit-app-region: no-drag;
+  }
+  .wc-filter-toggle-btn:hover { color: var(--on-brand); }
+  .wc-filter-clear-btn {
+    background: none; border: none; color: var(--on-brand-dim); font-size: 10.5px;
+    font-weight: 700; text-decoration: underline; cursor: pointer; -webkit-app-region: no-drag;
+  }
+  .wc-filter-panel {
+    background: rgba(255,255,255,0.06); border-radius: 10px; padding: 10px 10px 2px;
+    margin-bottom: 10px;
+  }
+  .wc-filter-panel .field:last-child { margin-bottom: 8px; }
+  .wc-date-row { display: flex; gap: 6px; }
+  .wc-date-row input { flex: 1; }
   .wc-detail-issue { color: var(--on-brand); font-size: 13px; font-weight: 600; margin-bottom: 4px; }
   .wc-detail-meta { color: var(--on-brand-dim); font-size: 11.5px; margin-bottom: 14px; }
   .wc-detail-meta a { color: inherit; }
@@ -1269,7 +1286,73 @@
   // picking a ticket to update needs the real current state.
 
   let wcTickets = []; // last fetch — filtering below re-renders from this, no extra network call
-  let wcFilter = 'open'; // 'open' | 'all' — defaults to Open since that's the actual meeting agenda
+  // Closed questions get their own tab instead of hiding behind a generic
+  // "All" toggle — Resolved/Deferred is genuinely a different list people
+  // look at for a different reason (history/reference) than the live
+  // open-to-pending agenda, which is what "Open" defaults to.
+  let wcTab = 'open'; // 'open' | 'closed'
+  // Collapsed by default on purpose — filters exist for whoever needs
+  // them, but the common case (glance at what's open) shouldn't have to
+  // look past a wall of search/chip controls to get there.
+  let wcFiltersExpanded = false;
+  let wcSearch = '';
+  let wcStatusFilter = []; // multiselect — values are whatever Status strings actually exist
+  let wcRequesterFilter = [];
+  let wcOwnerFilter = [];
+  let wcDateFrom = '';
+  let wcDateTo = '';
+  const WC_CLOSED_STATUSES = ['Resolved', 'Deferred'];
+
+  function wcActiveFilterCount() {
+    return (wcSearch.trim() ? 1 : 0) + (wcStatusFilter.length ? 1 : 0) +
+      (wcRequesterFilter.length ? 1 : 0) + (wcOwnerFilter.length ? 1 : 0) +
+      (wcDateFrom || wcDateTo ? 1 : 0);
+  }
+
+  function wcClearFilters() {
+    wcSearch = ''; wcStatusFilter = []; wcRequesterFilter = []; wcOwnerFilter = [];
+    wcDateFrom = ''; wcDateTo = '';
+  }
+
+  // Whichever tab is active, before any of the filter panel's own filters
+  // are applied on top.
+  function wcBaseTickets() {
+    return wcTickets.filter((t) => {
+      const isClosed = WC_CLOSED_STATUSES.indexOf(t.Status || '') !== -1;
+      return wcTab === 'closed' ? isClosed : !isClosed;
+    });
+  }
+
+  // Chip options are always exactly what's actually present in the
+  // current tab's tickets — never a fixed list that could offer a
+  // Status/Requester/Owner nothing in view actually has.
+  function wcDistinctValues(base, field) {
+    const seen = new Set();
+    base.forEach((t) => { if (t[field]) seen.add(t[field]); });
+    return Array.from(seen).sort();
+  }
+
+  // "search questions and give them in result if any word matches" —
+  // splits the query into words, matches if ANY of them appears anywhere
+  // in the ticket's Issue/Comments/Requester/Owner (case-insensitive).
+  function wcApplyFilters(base) {
+    const words = wcSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return base.filter((t) => {
+      if (wcStatusFilter.length && wcStatusFilter.indexOf(t.Status || '') === -1) return false;
+      if (wcRequesterFilter.length && wcRequesterFilter.indexOf(t.Requester || '') === -1) return false;
+      if (wcOwnerFilter.length && wcOwnerFilter.indexOf(t.Owner || '') === -1) return false;
+      // t.Date is 'yyyy-MM-dd' (see getWeeklyConnectTickets in Code.gs), same
+      // as what <input type="date"> gives back — plain string comparison
+      // sorts correctly for ISO dates, no need to parse either side.
+      if (wcDateFrom && (!t.Date || t.Date < wcDateFrom)) return false;
+      if (wcDateTo && (!t.Date || t.Date > wcDateTo)) return false;
+      if (words.length) {
+        const haystack = [t.Issue, t.Comments, t.Requester, t.Owner].filter(Boolean).join(' ').toLowerCase();
+        if (!words.some((w) => haystack.indexOf(w) !== -1)) return false;
+      }
+      return true;
+    });
+  }
 
   async function showWeeklyConnectTickets() {
     els.sub.textContent = 'Weekly Connect Tickets';
@@ -1286,20 +1369,185 @@
     }
   }
 
+  function wcBuildTicketCard(t) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'wc-ticket-btn';
+    const statusClass = 'status-' + String(t.Status || '').toLowerCase().replace(/\s+/g, '-');
+    const priorityClass = 'priority-' + String(t.Priority || '').toLowerCase();
+    btn.innerHTML = `
+      <div class="wc-ticket-top">
+        <span class="wc-ticket-id">Q${escapeHtml(t['Ticket ID'])}</span>
+        <div class="wc-badges">
+          ${t.stale ? '<span class="badge stale">Stale</span>' : ''}
+          ${t.Priority ? `<span class="badge ${priorityClass}">${escapeHtml(t.Priority)}</span>` : ''}
+          ${t.Status ? `<span class="badge ${statusClass}">${escapeHtml(t.Status)}</span>` : ''}
+        </div>
+      </div>
+      <div class="wc-ticket-issue">${escapeHtml(stripMarkdown(t.Issue) || '(no description)')}</div>
+      <div class="wc-ticket-meta">${t.Group ? escapeHtml(t.Group) + ' · ' : ''}${escapeHtml(t.Requester || 'Unknown')} · ${escapeHtml(t.Date || '')}</div>
+    `;
+    btn.onclick = () => showWeeklyConnectEdit(t);
+    return btn;
+  }
+
+  // Split out from the full render so typing in the search box only ever
+  // touches this container — re-rendering the whole screen on every
+  // keystroke would recreate the search <input> itself and throw away
+  // focus/cursor position mid-type. Chips/dates/tabs still trigger a full
+  // re-render (nothing being actively typed into there), just search.
+  // Also refreshes the "Filters (N)" toggle label and Clear button by id
+  // — those live outside this container, but search is the one filter
+  // that only ever calls this narrower function, so its count/Clear
+  // visibility would otherwise go stale the moment search became the
+  // only active filter (caught by testing this directly, not assumed).
+  function renderWcResults() {
+    const container = document.getElementById('wc-results');
+    if (!container) return;
+    container.innerHTML = '';
+    const visible = wcApplyFilters(wcBaseTickets());
+    if (!visible.length) {
+      const empty = document.createElement('div');
+      empty.className = 'wc-empty';
+      empty.textContent = wcActiveFilterCount()
+        ? 'No tickets match these filters.'
+        : (wcTab === 'closed' ? 'No closed tickets yet.' : 'No open tickets right now.');
+      container.appendChild(empty);
+    } else {
+      visible.forEach((t) => container.appendChild(wcBuildTicketCard(t)));
+    }
+    const toggleBtn = document.getElementById('wc-filter-toggle-btn');
+    if (toggleBtn) {
+      const activeCount = wcActiveFilterCount();
+      toggleBtn.textContent = (wcFiltersExpanded ? '▾ ' : '▸ ') + 'Filters' + (activeCount ? ` (${activeCount})` : '');
+      const clearBtn = document.getElementById('wc-filter-clear-btn');
+      if (activeCount && !clearBtn) {
+        const newClearBtn = document.createElement('button');
+        newClearBtn.type = 'button';
+        newClearBtn.id = 'wc-filter-clear-btn';
+        newClearBtn.className = 'wc-filter-clear-btn';
+        newClearBtn.textContent = 'Clear';
+        newClearBtn.onclick = () => { wcClearFilters(); renderWeeklyConnectList(); };
+        toggleBtn.parentElement.appendChild(newClearBtn);
+      } else if (!activeCount && clearBtn) {
+        clearBtn.remove();
+      }
+    }
+  }
+
   function renderWeeklyConnectList() {
     els.main.innerHTML = '';
 
-    const filterRow = document.createElement('div');
-    filterRow.className = 'wc-filter-row';
-    [['open', 'Open'], ['all', 'All']].forEach(([key, label]) => {
+    const tabRow = document.createElement('div');
+    tabRow.className = 'wc-filter-row';
+    [['open', 'Open'], ['closed', 'Closed']].forEach(([key, label]) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'wc-filter-btn' + (wcFilter === key ? ' active' : '');
+      btn.className = 'wc-filter-btn' + (wcTab === key ? ' active' : '');
       btn.textContent = label;
-      btn.onclick = () => { wcFilter = key; renderWeeklyConnectList(); };
-      filterRow.appendChild(btn);
+      btn.onclick = () => { wcTab = key; renderWeeklyConnectList(); };
+      tabRow.appendChild(btn);
     });
-    els.main.appendChild(filterRow);
+    els.main.appendChild(tabRow);
+
+    const base = wcBaseTickets();
+    const activeCount = wcActiveFilterCount();
+
+    const toggleRow = document.createElement('div');
+    toggleRow.className = 'wc-filter-toggle-row';
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.id = 'wc-filter-toggle-btn';
+    toggleBtn.className = 'wc-filter-toggle-btn';
+    toggleBtn.textContent = (wcFiltersExpanded ? '▾ ' : '▸ ') + 'Filters' + (activeCount ? ` (${activeCount})` : '');
+    toggleBtn.onclick = () => { wcFiltersExpanded = !wcFiltersExpanded; renderWeeklyConnectList(); };
+    toggleRow.appendChild(toggleBtn);
+    if (activeCount) {
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.id = 'wc-filter-clear-btn';
+      clearBtn.className = 'wc-filter-clear-btn';
+      clearBtn.textContent = 'Clear';
+      clearBtn.onclick = () => { wcClearFilters(); renderWeeklyConnectList(); };
+      toggleRow.appendChild(clearBtn);
+    }
+    els.main.appendChild(toggleRow);
+
+    if (wcFiltersExpanded) {
+      const panel = document.createElement('div');
+      panel.className = 'wc-filter-panel';
+
+      const searchWrap = document.createElement('div');
+      searchWrap.className = 'field';
+      const searchLabel = document.createElement('label');
+      searchLabel.textContent = 'Search';
+      searchWrap.appendChild(searchLabel);
+      const searchInput = document.createElement('input');
+      searchInput.type = 'text';
+      searchInput.placeholder = 'Search questions, comments, people…';
+      searchInput.value = wcSearch;
+      searchInput.oninput = debounce(() => {
+        wcSearch = searchInput.value;
+        renderWcResults(); // results only — see renderWcResults' own comment for why
+      }, 250);
+      searchWrap.appendChild(searchInput);
+      panel.appendChild(searchWrap);
+
+      const buildChipFilter = (label, field, selectedArr) => {
+        const options = wcDistinctValues(base, field);
+        if (!options.length) return null;
+        const wrap = document.createElement('div');
+        wrap.className = 'field';
+        const labelEl = document.createElement('label');
+        labelEl.textContent = label;
+        wrap.appendChild(labelEl);
+        const group = document.createElement('div');
+        group.className = 'chip-group';
+        options.forEach((val) => {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'chip' + (selectedArr.indexOf(val) !== -1 ? ' selected' : '');
+          chip.textContent = val;
+          chip.onclick = () => {
+            const idx = selectedArr.indexOf(val);
+            if (idx === -1) selectedArr.push(val); else selectedArr.splice(idx, 1);
+            renderWeeklyConnectList();
+          };
+          group.appendChild(chip);
+        });
+        wrap.appendChild(group);
+        return wrap;
+      };
+
+      const statusChips = buildChipFilter('Status', 'Status', wcStatusFilter);
+      if (statusChips) panel.appendChild(statusChips);
+      const requesterChips = buildChipFilter('Requester', 'Requester', wcRequesterFilter);
+      if (requesterChips) panel.appendChild(requesterChips);
+      const ownerChips = buildChipFilter('Owner', 'Owner', wcOwnerFilter);
+      if (ownerChips) panel.appendChild(ownerChips);
+
+      const dateWrap = document.createElement('div');
+      dateWrap.className = 'field';
+      const dateLabel = document.createElement('label');
+      dateLabel.textContent = 'Date range';
+      dateWrap.appendChild(dateLabel);
+      const dateRow = document.createElement('div');
+      dateRow.className = 'wc-date-row';
+      const fromInput = document.createElement('input');
+      fromInput.type = 'date';
+      fromInput.value = wcDateFrom;
+      fromInput.onchange = () => { wcDateFrom = fromInput.value; renderWcResults(); };
+      const toInput = document.createElement('input');
+      toInput.type = 'date';
+      toInput.value = wcDateTo;
+      toInput.onchange = () => { wcDateTo = toInput.value; renderWcResults(); };
+      dateRow.appendChild(fromInput);
+      dateRow.appendChild(toInput);
+      dateWrap.appendChild(dateRow);
+      panel.appendChild(dateWrap);
+
+      els.main.appendChild(panel);
+    }
 
     const postBtn = document.createElement('button');
     postBtn.type = 'button';
@@ -1309,38 +1557,10 @@
     postBtn.onclick = showPostToTeams;
     els.main.appendChild(postBtn);
 
-    const visible = wcFilter === 'open'
-      ? wcTickets.filter((t) => ['Resolved', 'Deferred'].indexOf(t.Status || '') === -1)
-      : wcTickets;
-
-    if (!visible.length) {
-      const empty = document.createElement('div');
-      empty.className = 'wc-empty';
-      empty.textContent = wcFilter === 'open' ? 'No open tickets right now.' : 'No tickets yet.';
-      els.main.appendChild(empty);
-    }
-
-    visible.forEach((t) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'wc-ticket-btn';
-      const statusClass = 'status-' + String(t.Status || '').toLowerCase().replace(/\s+/g, '-');
-      const priorityClass = 'priority-' + String(t.Priority || '').toLowerCase();
-      btn.innerHTML = `
-        <div class="wc-ticket-top">
-          <span class="wc-ticket-id">Q${escapeHtml(t['Ticket ID'])}</span>
-          <div class="wc-badges">
-            ${t.stale ? '<span class="badge stale">Stale</span>' : ''}
-            ${t.Priority ? `<span class="badge ${priorityClass}">${escapeHtml(t.Priority)}</span>` : ''}
-            ${t.Status ? `<span class="badge ${statusClass}">${escapeHtml(t.Status)}</span>` : ''}
-          </div>
-        </div>
-        <div class="wc-ticket-issue">${escapeHtml(stripMarkdown(t.Issue) || '(no description)')}</div>
-        <div class="wc-ticket-meta">${t.Group ? escapeHtml(t.Group) + ' · ' : ''}${escapeHtml(t.Requester || 'Unknown')} · ${escapeHtml(t.Date || '')}</div>
-      `;
-      btn.onclick = () => showWeeklyConnectEdit(t);
-      els.main.appendChild(btn);
-    });
+    const results = document.createElement('div');
+    results.id = 'wc-results';
+    els.main.appendChild(results);
+    renderWcResults();
 
     const backBtn = document.createElement('button');
     backBtn.type = 'button';

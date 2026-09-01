@@ -557,7 +557,17 @@ ipcMain.handle('quit-and-install', () => {
 });
 
 ipcMain.handle('open-external', (_e, url) => {
-  if (url) shell.openExternal(url);
+  if (!url) return;
+  // User-typed URLs (Weekly Connect's "URL" field is free text) commonly
+  // omit the protocol - "sharepoint.com/sites/..." instead of
+  // "https://sharepoint.com/sites/..." - and shell.openExternal() on
+  // Windows can then read that as a relative file path rather than a web
+  // address, silently opening a local folder instead of the intended
+  // link. Assume https if nothing already looks like a real URI scheme
+  // (covers mailto:, ftp:, etc. too - anything already qualified passes
+  // through untouched).
+  const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url.trim());
+  shell.openExternal(hasScheme ? url.trim() : 'https://' + url.trim());
 });
 ipcMain.handle('hide-window', () => hidePopup());
 

@@ -640,6 +640,14 @@ ipcMain.handle('save-connection-config', (event, conn) => {
 });
 
 ipcMain.handle('open-connection-settings', () => {
+  // The main popup is alwaysOnTop at the highest tier ('screen-saver' — see
+  // createPopup) so it's never lost behind other apps. That means it also
+  // floats visually ON TOP of any window opened from inside it — including
+  // swallowing clicks/scrolling meant for that window underneath, since
+  // it's still an active surface sitting above it. Get it out of the way
+  // whenever a screen it launched is about to show, same as it already
+  // does to the floating icon when the popup itself opens.
+  if (popup && popup.isVisible()) hidePopup();
   if (!connectWin || connectWin.isDestroyed()) {
     connectWin = createConnectWindow();
   } else {
@@ -768,6 +776,9 @@ ipcMain.handle('set-user-role', async (_e, { username, role }) => {
 // categories), and keeping it independent of the popup's own show*()
 // screen-switching state avoids tangling two very different UIs together.
 ipcMain.handle('open-manage-screen', () => {
+  // Same reasoning as open-connection-settings above — the alwaysOnTop
+  // popup would otherwise float over this window and eat its input.
+  if (popup && popup.isVisible()) hidePopup();
   if (!manageWin || manageWin.isDestroyed()) {
     manageWin = createManageWindow();
   } else {

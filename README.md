@@ -323,3 +323,22 @@ Defaults: reminder at 6pm Friday, report at 11pm Friday, both in the
   there. The shared token (`SHARED_SECRET`) has no sheet-editable
   equivalent — see step 4 above — since a token that lived in a sheet
   cell would defeat its own purpose.
+- Every screen carries a "Contact Admin" footer (Requester/User
+  Affected/Issue/Explanation) — it emails `_Config`'s
+  `AdminContactEmails` (also editable from Report Settings) and always
+  logs a row on `_SupportTickets`, even if that list is empty. Resolution
+  is intentionally admin-only: fill it in directly on that tab, the same
+  "edit the row in place" pattern Weekly Connect's Status/Comments uses.
+- Renaming a tab should go through the widget (Settings -> "Manage
+  fields & options" -> Report Settings -> "Rename a tab") or `_Features`'
+  own how-to, not Sheets' own File > Rename — the app rewrites every
+  reference to the old name (`_Categories`, `_FieldSchema`,
+  `_ReportConfigs`, `ReportTabs`/`HiddenTabs`) in the same step; renaming
+  the sheet tab directly only changes the tab itself and leaves those
+  pointing at a name that no longer exists.
+- Saving a brand-new landing-screen category (`_Categories`, or the
+  widget's own Categories screen) automatically stubs out a matching
+  Report Config with that category's tabs — disabled and recipient-less
+  until you actually fill it in, but there from the start rather than a
+  manual "now go add a report for it too" step. It never touches a config
+  that already exists under that name.

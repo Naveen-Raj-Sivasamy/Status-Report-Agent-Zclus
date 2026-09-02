@@ -354,6 +354,10 @@ function doPost(e) {
         }
         writeCategoriesMap(body.categories || {});
         CacheService.getScriptCache().remove('categories');
+        // Every category gets a Report Config by default from here on —
+        // see ensureReportConfigsForCategories_'s own comment for why this
+        // only fills gaps rather than overwriting anything.
+        ensureReportConfigsForCategories_(body.categories || {});
         return jsonOut({ ok: true, message: 'Categories saved.' });
       } finally {
         writeLock.releaseLock();
@@ -390,6 +394,13 @@ function doPost(e) {
           reportRecipients: getConfigList_('ReportRecipients'),
           reminderRecipients: getConfigList_('ReminderRecipients'),
           teamsWebhookUrl: getConfigValue('TeamsWebhookUrl'),
+          // Who "Contact Admin" (the footer form every screen carries —
+          // see submitAdminContact below) emails. Deliberately its own
+          // _Config key, not folded into ReportRecipients/ReminderRecipients
+          // — those are "who gets the scheduled Friday stuff", this is "who
+          // gets paged when something's actually broken for someone", and
+          // an org may well want different people on each.
+          adminContactEmails: getConfigList_('AdminContactEmails'),
         },
       });
     }
@@ -411,11 +422,106 @@ function doPost(e) {
         setConfigValue('ReportRecipients', (settings.reportRecipients || []).join(', '));
         setConfigValue('ReminderRecipients', (settings.reminderRecipients || []).join(', '));
         setConfigValue('TeamsWebhookUrl', (settings.teamsWebhookUrl || '').trim());
+        setConfigValue('AdminContactEmails', (settings.adminContactEmails || []).join(', '));
       } finally {
         reportLock.releaseLock();
       }
       CacheService.getScriptCache().remove('tabs');
       return jsonOut({ ok: true, message: 'Report settings saved.' });
+    }
+
+    /** Renames a real sheet tab AND every reference to its old name across
+     * _Categories, _FieldSchema, _ReportConfigs, and _Config's
+     * ReportTabs/HiddenTabs lists, in one locked transaction — see
+     * renameTabReferences_ for why this exists (Sheets' own File > Rename
+     * only ever changed the tab itself, silently orphaning every one of
+     * those, which is what "Rename or delete an existing tab: In App = No"
+     * meant in the Sheet-vs-App table before this). */
+    if (body.action === 'renameTab') {
+      var oldName = String(body.oldName || '').trim();
+      var newName = String(body.newName || '').trim();
+      if (!oldName || !newName) {
+        return jsonOut({ ok: false, error: 'Both the current and new tab name are required.' });
+      }
+      if (oldName.indexOf('_') === 0 || newName.indexOf('_') === 0) {
+        return jsonOut({ ok: false, error: 'Tab names starting with "_" are this app\'s own config tabs and can\'t be renamed or renamed to.' });
+      }
+      if (oldName === newName) {
+        return jsonOut({ ok: false, error: 'That\'s already this tab\'s name.' });
+      }
+      var renameLock = LockService.getScriptLock();
+      if (!renameLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        var renameSs = SpreadsheetApp.getActiveSpreadsheet();
+        var renameTarget = renameSs.getSheetByName(oldName);
+        if (!renameTarget) {
+          return jsonOut({ ok: false, error: 'No tab named "' + oldName + '" exists.' });
+        }
+        if (renameSs.getSheetByName(newName)) {
+          return jsonOut({ ok: false, error: 'A tab named "' + newName + '" already exists — pick a different name.' });
+        }
+        renameTarget.setName(newName);
+        renameTabReferences_(oldName, newName);
+      } finally {
+        renameLock.releaseLock();
+      }
+      ['tabs', 'categories', 'fieldSchema', 'options'].forEach(function (key) {
+        CacheService.getScriptCache().remove(key);
+      });
+      return jsonOut({ ok: true, message: 'Renamed "' + oldName + '" to "' + newName + '".' });
+    }
+
+    /** The footer "Contact Admin" form every screen carries. Logs a row to
+     * _SupportTickets (Resolution is intentionally never set here — an
+     * admin fills that in later, directly in the sheet, same as Weekly
+     * Connect's Status/Comments) and best-effort emails whoever's on
+     * AdminContactEmails. No admin session required to submit this — the
+     * whole point is that anyone hitting a problem can reach an admin, the
+     * same as any other data-entry action only the shared app TOKEN gates. */
+    if (body.action === 'submitAdminContact') {
+      var requester = String(body.requester || '').trim();
+      var issue = String(body.issue || '').trim();
+      if (!requester || !issue) {
+        return jsonOut({ ok: false, error: 'Requester and Issue are required.' });
+      }
+      var userAffected = String(body.userAffected || '').trim();
+      var explanation = String(body.explanation || '').trim();
+
+      var contactLock = LockService.getScriptLock();
+      if (!contactLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        var ticketSheet = ensureSupportTicketsTab_();
+        ticketSheet.appendRow([new Date(), requester, userAffected, issue, explanation, '']);
+      } finally {
+        contactLock.releaseLock();
+      }
+
+      // Best-effort, after the lock is released — a slow/failed send
+      // shouldn't turn an already-logged ticket into an error the
+      // submitter sees, same reasoning as logAudit_'s own comment.
+      try {
+        var adminEmails = getConfigList_('AdminContactEmails');
+        if (adminEmails.length) {
+          var contactSubject = 'Contact Admin: ' + issue.slice(0, 80);
+          var contactBody =
+            'Requester: ' + requester + '\n' +
+            'User affected: ' + (userAffected || '(same as requester)') + '\n\n' +
+            'Issue:\n' + issue + '\n\n' +
+            (explanation ? 'Explanation:\n' + explanation + '\n\n' : '') +
+            'Logged on _SupportTickets here:\n' + SpreadsheetApp.getActiveSpreadsheet().getUrl();
+          adminEmails.forEach(function (addr) {
+            MailApp.sendEmail(addr, contactSubject, contactBody);
+          });
+        }
+      } catch (mailErr) {
+        Logger.log('submitAdminContact: email send failed — ' + mailErr);
+      }
+
+      return jsonOut({ ok: true, message: 'Sent to admin(s) and logged.' });
     }
 
     /** Updates one Weekly Connect ticket's Status/Comments in place — the
@@ -2264,6 +2370,11 @@ function ensureFeaturesTab() {
       "Shows up in the widget automatically. To fold it into the Friday emailed report too, add its exact name to _Config's ReportTabs (see the row below) — or use the app's \"Manage Fields & Options\" screen.",
     ],
     [
+      'Rename an existing tab',
+      '1. Widget -> Settings -> "Manage fields & options" -> Report Settings -> "Rename a tab" -> pick it, type the new name, Rename.',
+      'Do this from the app, not by renaming the tab directly in Sheets — the app also rewrites the old name everywhere it\'s referenced (_Categories, _FieldSchema, _ReportConfigs, ReportTabs/HiddenTabs). Renaming in Sheets only changes the tab itself and leaves every one of those pointing at a name that no longer exists.',
+    ],
+    [
       'Choose which tabs feed the Friday report',
       '1. Open _Config.\n2. Edit the ReportTabs row: comma-separated exact tab names.',
       'Or use the app\'s "Manage Fields & Options" -> Report Settings, which shows checkboxes instead of typed names.',
@@ -2277,6 +2388,11 @@ function ensureFeaturesTab() {
       'Change who gets the report / Friday reminder emails',
       '1. Open _Config.\n2. Edit ReportRecipients and/or ReminderRecipients: comma-separated emails.',
       'Leave ReminderRecipients blank to reuse ReportRecipients. Also settable from the app\'s "Manage Fields & Options" -> Report Settings.',
+    ],
+    [
+      'Change who "Contact Admin" emails',
+      '1. Open _Config.\n2. Edit the AdminContactEmails row: comma-separated emails.',
+      'Also settable from "Manage Fields & Options" -> Report Settings. Every submitted contact form is also logged as a row on _SupportTickets regardless of whether this list is empty.',
     ],
     [
       'See your changes in the app right away',
@@ -2383,7 +2499,9 @@ function writeSheetVsAppTable_(sheet) {
     ['Set/change the Friday-reminder Teams webhook', 'Yes', 'Yes'],
     ['Add/edit/delete a Weekly Connect group', 'Yes', 'Yes'],
     ['Create a brand-new tab', 'Yes', 'No'],
-    ['Rename or delete an existing tab', 'Yes', 'No'],
+    ['Rename an existing tab', 'Yes', 'Yes'],
+    ['Delete an existing tab', 'Yes', 'No'],
+    ['Contact the admin(s) about an issue', 'No', 'Yes'],
     ['Change the connection token / admin password', 'No', 'Yes'],
     ['Reminder schedule (day/time) and holidays', 'Code change', 'Code change'],
   ];
@@ -2408,6 +2526,53 @@ function writeSheetVsAppTable_(sheet) {
     if (v === 'Code change') return CODE;
     return NO;
   }
+}
+
+/** Rewrites every place a tab's OLD name is stored as a literal string,
+ * right after the sheet tab itself has already been renamed (see the
+ * renameTab action above) — _Categories/_FieldSchema/_ReportConfigs are
+ * each one-row-per-(...,Tab) tables, so this is a plain exact-match
+ * find/replace down their Tab column; _Config's ReportTabs/HiddenTabs are
+ * comma-separated lists on a single cell instead, so those go through
+ * getConfigList_/setConfigValue rather than a column scan. Everything
+ * else that's tab-scoped (_Options is keyed by OptionsKey, not tab name;
+ * the tab's own submitted rows obviously don't reference their own tab
+ * name at all) needs no rewrite — this is deliberately NOT a generic
+ * "replace this string everywhere" sweep, just the specific handful of
+ * places that actually key off a tab name. Called only from inside
+ * renameTab's own lock, so no locking of its own. */
+function renameTabReferences_(oldName, newName) {
+  renameInColumn_(CATEGORIES_TAB_NAME, 2, oldName, newName);
+  renameInColumn_(FIELD_SCHEMA_TAB_NAME, 1, oldName, newName);
+  renameInColumn_(REPORT_CONFIGS_TAB_NAME, 2, oldName, newName);
+
+  ['ReportTabs', 'HiddenTabs'].forEach(function (key) {
+    var list = getConfigList_(key);
+    var idx = list.indexOf(oldName);
+    if (idx === -1) return;
+    list[idx] = newName;
+    setConfigValue(key, list.join(', '));
+  });
+}
+
+/** Exact-match replace of `oldValue` with `newValue` anywhere it appears
+ * (trimmed) in `sheetName`'s 1-based `col`, across every data row. A
+ * no-op if the tab doesn't exist yet (a brand-new org) or has no rows. */
+function renameInColumn_(sheetName, col, oldValue, newValue) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  if (!sheet) return;
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return;
+  var range = sheet.getRange(2, col, lastRow - 1, 1);
+  var values = range.getValues();
+  var changed = false;
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][0]).trim() === oldValue) {
+      values[i][0] = newValue;
+      changed = true;
+    }
+  }
+  if (changed) range.setValues(values);
 }
 
 function getSheetByName(name) {
@@ -2523,6 +2688,9 @@ function ensureConfigDefaults_(sheet) {
     ['ReportRecipients', ''],
     ['ReminderRecipients', ''],
     ['TeamsWebhookUrl', ''],
+    // Who the footer's "Contact Admin" form emails — see submitAdminContact
+    // and the _SupportTickets tab it also logs every submission to.
+    ['AdminContactEmails', ''],
     // 'FALSE' by default on purpose — flipping this to 'TRUE' makes login
     // mandatory for everyone (see the hasAccount action's requireLogin
     // field, and index.html's checkLoginGate). Defaulting to FALSE means
@@ -2673,6 +2841,26 @@ function ensureReportConfigsTab() {
   ensureScheduledReportsTrigger_();
 }
 
+// -------------------- Contact Admin (footer form on every screen) --------------------
+
+// Starts with "_" like every other internal tab, so it never shows up as
+// a pickable category tab in the widget. Resolution is left blank by
+// submitAdminContact on purpose — an admin fills it in later, directly in
+// the sheet, the same "edit the row in place" pattern Weekly Connect's
+// Status/Comments already uses.
+var SUPPORT_TICKETS_TAB_NAME = '_SupportTickets';
+var SUPPORT_TICKETS_COLUMNS = ['Timestamp', 'Requester', 'User Affected', 'Issue', 'Explanation', 'Resolution'];
+
+function ensureSupportTicketsTab_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SUPPORT_TICKETS_TAB_NAME);
+  if (sheet) return sheet;
+  sheet = ss.insertSheet(SUPPORT_TICKETS_TAB_NAME);
+  sheet.getRange(1, 1, 1, SUPPORT_TICKETS_COLUMNS.length).setValues([SUPPORT_TICKETS_COLUMNS]);
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
 /** Every report config, grouped from the flat sheet rows into
  * {name, tabs: [{tab, fields}], recipients, scheduleDay, scheduleHour,
  * enabled} objects, in the sheet's own row order (first-seen ConfigName
@@ -2711,6 +2899,42 @@ function getReportConfigs() {
     byName[name].tabs.push({ tab: tab, fields: fields });
   });
   return order.map(function (name) { return byName[name]; });
+}
+
+/** Called from the saveCategories action, right after writeCategoriesMap
+ * — so "whatever category gets added, it gets a Report Config by
+ * default" isn't a manual second step. For every category name in the
+ * map that doesn't already have a matching _ReportConfigs entry (exact
+ * name match), appends a stub: that category's current tabs, no
+ * recipients, no schedule (manual-only), Enabled = FALSE. It's deliberately
+ * OFF and recipient-less by default — the point is that the config
+ * already exists and is ready to fill in, not that it starts emailing
+ * nobody. Never touches a config that already exists under that name —
+ * this only fills gaps, so a config someone's already customized (renamed,
+ * repointed at different tabs, given its own recipients) is left alone
+ * even if its name still happens to match a category. Appends directly
+ * to the sheet rather than going through writeReportConfigs (which
+ * replaces every row) since this only ever needs to ADD rows; called
+ * from inside saveCategories' own lock, so no locking of its own. */
+function ensureReportConfigsForCategories_(categoriesMap) {
+  var existingNames = getReportConfigs().map(function (c) { return c.name; });
+  ensureReportConfigsTab();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(REPORT_CONFIGS_TAB_NAME);
+  var newRows = [];
+  Object.keys(categoriesMap || {}).forEach(function (categoryName) {
+    var category = String(categoryName).trim();
+    if (!category || existingNames.indexOf(category) !== -1) return;
+    var tabs = categoriesMap[categoryName] || [];
+    tabs.forEach(function (tabName) {
+      var tab = String(tabName).trim();
+      if (!tab) return;
+      newRows.push([category, tab, '', '', '', '', 'FALSE']);
+    });
+    existingNames.push(category); // one stub per category, even with duplicate rows in the map
+  });
+  if (newRows.length) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, REPORT_CONFIGS_COLUMNS.length).setValues(newRows);
+  }
 }
 
 /** One config by name, or the first one if `name` is blank/not found —

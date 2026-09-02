@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('statusApp', {
   saveCategories: (categories) => ipcRenderer.invoke('save-categories', categories),
   getReportSettings: () => ipcRenderer.invoke('get-report-settings'),
   saveReportSettings: (settings) => ipcRenderer.invoke('save-report-settings', settings),
+  renameTab: (oldName, newName) => ipcRenderer.invoke('rename-tab', { oldName, newName }),
+  submitAdminContact: (payload) => ipcRenderer.invoke('submit-admin-contact', payload),
   getReportConfigs: () => ipcRenderer.invoke('get-report-configs'),
   saveReportConfigs: (configs) => ipcRenderer.invoke('save-report-configs', configs),
   getConnectGroups: () => ipcRenderer.invoke('get-connect-groups'),

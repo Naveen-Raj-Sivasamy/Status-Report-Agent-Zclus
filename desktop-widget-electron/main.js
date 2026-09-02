@@ -482,6 +482,25 @@ ipcMain.handle('save-report-settings', async (_e, settings) => {
   tabsCache = null; // HiddenTabs can change which tabs the widget shows
   return result;
 });
+// Renames a real sheet tab and rewrites every reference to its old name
+// server-side (see renameTab/renameTabReferences_ in Code.gs) — a rename
+// can touch the tab list, categories, columns, field types and options
+// all at once, so every in-memory cache this process keeps gets dropped
+// rather than picking through which ones actually changed.
+ipcMain.handle('rename-tab', async (_e, { oldName, newName }) => {
+  const result = await apiPostBody({ action: 'renameTab', oldName, newName });
+  tabsCache = null;
+  columnsCache = {};
+  optionsCache = null;
+  fieldSchemaCache = null;
+  categoriesCache = null;
+  return result;
+});
+// The footer "Contact Admin" form every screen carries — no cache to
+// invalidate, this only ever appends a row server-side.
+ipcMain.handle('submit-admin-contact', async (_e, payload) =>
+  apiPostBody(Object.assign({ action: 'submitAdminContact' }, payload))
+);
 // Connect Groups — same doPost/token-gated reasoning as report settings
 // (a webhook URL is a write capability). Group names are synced into
 // _Options server-side, so a save here also invalidates this process's

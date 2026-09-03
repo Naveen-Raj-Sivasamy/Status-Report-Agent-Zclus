@@ -410,6 +410,9 @@ function doPost(e) {
           // gets paged when something's actually broken for someone", and
           // an org may well want different people on each.
           adminContactEmails: getConfigList_('AdminContactEmails'),
+          // See ensureWeeklyConnectTab's own comment — this is the actual
+          // way to make a deleted Weekly_Connect tab/category stay deleted.
+          disableWeeklyConnect: getConfigValue('DisableWeeklyConnect') === 'TRUE',
         },
       });
     }
@@ -432,6 +435,7 @@ function doPost(e) {
         setConfigValue('ReminderRecipients', (settings.reminderRecipients || []).join(', '));
         setConfigValue('TeamsWebhookUrl', (settings.teamsWebhookUrl || '').trim());
         setConfigValue('AdminContactEmails', (settings.adminContactEmails || []).join(', '));
+        setConfigValue('DisableWeeklyConnect', settings.disableWeeklyConnect ? 'TRUE' : 'FALSE');
       } finally {
         reportLock.releaseLock();
       }
@@ -1354,8 +1358,23 @@ var WEEKLY_CONNECT_COLUMNS = [
  * doesn't already exist. Never touches the tab again once it's there —
  * same as ensureLeaveTab() — so renaming columns or adding your own is
  * completely safe (just keep 'Ticket ID', 'Group', and 'Status' if you
- * want updateWeeklyConnectTicket()/the Teams post to keep working). */
+ * want updateWeeklyConnectTicket()/the Teams post to keep working).
+ *
+ * That "if it doesn't already exist" is exactly the trap: this runs from
+ * listVisibleTabsUncached(), which is on the hot path of basically every
+ * tab-list read (bounded only by CACHE_SECONDS, or instantly on "Refresh
+ * tabs & fields") — so deleting the Weekly_Connect tab (or its
+ * _Categories rows, which seedWeeklyConnectConfig_ re-adds every time it
+ * recreates the tab) doesn't stay deleted; the very next tab-list read
+ * recreates it, often within seconds, which reads as "it keeps coming
+ * back no matter what I do." _Config's DisableWeeklyConnect is the actual
+ * way to remove this feature for good: flip it to 'TRUE' (Sheet, or
+ * Manage -> App Settings), THEN delete the tab and its _Categories rows —
+ * this function becomes a no-op from that point on, so the deletion
+ * finally sticks. Order matters: setting the flag doesn't retroactively
+ * remove anything already there. */
 function ensureWeeklyConnectTab() {
+  if (getConfigValue('DisableWeeklyConnect') === 'TRUE') return;
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (ss.getSheetByName(WEEKLY_CONNECT_TAB_NAME)) return;
   var sheet = ss.insertSheet(WEEKLY_CONNECT_TAB_NAME);
@@ -2414,6 +2433,11 @@ function ensureFeaturesTab() {
       "New tickets auto-post to their Group's own Teams channel (see the row below) as a running list scoped to the current Wed-to-Wed week. Status/Comments are the one thing in this whole app that edits an existing row instead of appending.",
     ],
     [
+      "Remove Weekly Connect entirely (you don't use it)",
+      '1. Open _Config.\n2. Set DisableWeeklyConnect to TRUE (or Manage -> App Settings -> "Disable Weekly Connect").\n3. THEN delete the Weekly_Connect tab and its rows on _Categories.',
+      'Order matters — deleting the tab first (or before setting this) doesn\'t stick: the next tab-list read recreates it automatically, same self-healing this app relies on to keep _Config/_Categories/etc. safe from an accidental delete. This flag is what tells it "actually, leave this one gone."',
+    ],
+    [
       'Add a Connect Group (another recurring meeting/channel)',
       '1. Open _ConnectGroups.\n2. Add a row: Group Name = whatever you\'ll call it, Teams Webhook URL = that channel\'s webhook.',
       'Or use the app\'s "Manage Fields & Options" -> Connect Groups. Shows up as a new Group choice on the Weekly_Connect form immediately — no code change. Started with one group, "CMS Weekly Connect" — add as many more as you actually run.',
@@ -2708,6 +2732,11 @@ function ensureConfigDefaults_(sheet) {
     // after every current teammate already has an account (createUser).
     // Editable right here in the Sheet, or from a future Manage screen.
     ['RequireLogin', 'FALSE'],
+    // 'FALSE' by default — same "shipping this never changes anything on
+    // its own" reasoning as RequireLogin above. See ensureWeeklyConnectTab's
+    // own comment for what flipping this to 'TRUE' actually does (stops
+    // it self-healing back after you delete it).
+    ['DisableWeeklyConnect', 'FALSE'],
   ];
   var data = sheet.getDataRange().getValues();
   var existingKeys = data.slice(1).map(function (r) { return String(r[0]).trim(); });

@@ -358,3 +358,13 @@ Defaults: reminder at 6pm Friday, report at 11pm Friday, both in the
   "now go add a report for it too" step. It never touches a config that
   already exists under that name, or restubs a category that was already
   there before this save (so it's always one small append, not a burst).
+- Deleting the `Weekly_Connect` tab (or its `_Categories` rows) doesn't
+  stick on its own — it self-heals back, same as `_Config`/`_Categories`/
+  every other structural tab, since `ensureWeeklyConnectTab()` recreates
+  and re-seeds it whenever it's missing and something reads the tab list
+  (which is often — bounded only by `CACHE_SECONDS`, or instant on
+  "Refresh tabs & fields"). To actually remove it: set `_Config`'s
+  `DisableWeeklyConnect` to `TRUE` FIRST (or Manage -> App Settings ->
+  "Disable Weekly Connect"), save, THEN delete the tab and its
+  `_Categories` rows — order matters, the flag only stops it from coming
+  *back*, it doesn't retroactively remove anything already there.

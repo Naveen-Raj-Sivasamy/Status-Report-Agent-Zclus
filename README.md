@@ -368,3 +368,14 @@ Defaults: reminder at 6pm Friday, report at 11pm Friday, both in the
   "Disable Weekly Connect"), save, THEN delete the tab and its
   `_Categories` rows — order matters, the flag only stops it from coming
   *back*, it doesn't retroactively remove anything already there.
+- The main popup's tab list and category list survive a restart on disk
+  (`offline-cache.json` in the app's own per-person data folder, written
+  every time a live fetch actually succeeds), not just in memory —
+  otherwise a fresh launch has nothing to fall back on if the backend
+  happens to be slow or unreachable right then, and the very first thing
+  anyone sees is a blocking wait (worst case, every retry timing out).
+  Same "show what you had, refresh quietly in the background" idea this
+  app already uses everywhere else, just surviving a restart too. Only
+  covers what blocks that very first screen (tabs + categories) — Manage
+  Fields' other reads stay in-memory-only, since that screen now shows a
+  real error + Retry instead of silently staying blank on a failed load.

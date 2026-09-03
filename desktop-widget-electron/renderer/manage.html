@@ -231,11 +231,28 @@
       <p class="hint" style="margin: -2px 0 6px;">Just the Friday reminder — Weekly Connect posts to its own group webhooks below instead. Leave blank to turn this one off.</p>
       <input id="teams-webhook-url" type="text" placeholder="https://..." style="width:100%;" />
 
+      <div class="field-label" style="margin-top:14px;">Admin contact emails</div>
+      <p class="hint" style="margin: -2px 0 6px;">Who the "Contact Admin" footer (every screen) emails when someone submits an issue. Every submission is also logged on _SupportTickets regardless of whether this list is empty.</p>
+      <div id="admin-contact-emails-rows"></div>
+      <button class="icon-btn" type="button" id="add-admin-contact-email-btn">+ Add email</button>
+
       <div class="row-actions">
         <button id="save-report-settings-btn">Save App Settings</button>
       </div>
       <div class="err" id="report-settings-err"></div>
       <div class="ok" id="report-settings-ok"></div>
+    </div>
+
+    <div class="section">
+      <h3>Rename a Tab</h3>
+      <p class="hint">Renames the sheet tab itself AND rewrites every place that references its old name (Categories, Field Types, Report Configs, and Report/Hidden tab lists) — this is why renaming here is safer than renaming directly in Sheets, which only changes the tab and leaves everything else pointing at a name that no longer exists.</p>
+      <div class="opt-row">
+        <select id="rename-tab-select" style="flex:1;"></select>
+        <input id="rename-tab-new-name" type="text" placeholder="New name" style="flex:1;" />
+        <button id="rename-tab-btn">Rename</button>
+      </div>
+      <div class="err" id="rename-tab-err"></div>
+      <div class="ok" id="rename-tab-ok"></div>
     </div>
 
     <div class="section">
@@ -274,6 +291,7 @@
        it's a sibling of .scroll-area, not inside it. -->
   <div class="drag-footer"></div>
 
+<script src="footer.js"></script>
 <script>
   document.getElementById('titlebar-close-btn').addEventListener('click', () => window.close());
   let liveTabs = [];
@@ -281,7 +299,7 @@
   let fieldSchemaMap = {};
   let categoriesMap = {};
   let allTabs = []; // every real tab, including currently-hidden ones — Report Settings/Report Configs both need this
-  let reportSettings = { hiddenTabs: [], reminderRecipients: [], teamsWebhookUrl: '' };
+  let reportSettings = { hiddenTabs: [], reminderRecipients: [], teamsWebhookUrl: '', adminContactEmails: [] };
   // [{name, tabs: [{tab, fields: [...]}], recipients: [...], scheduleDay, scheduleHour, enabled}, ...]
   let reportConfigs = [];
   let connectGroups = []; // [{name, webhookUrl}, ...]
@@ -389,7 +407,9 @@
     ['Set/change the Friday-reminder Teams webhook', 'yes', 'yes'],
     ['Add/edit/delete a Weekly Connect group', 'yes', 'yes'],
     ['Create a brand-new tab', 'yes', 'no'],
-    ['Rename or delete an existing tab', 'yes', 'no'],
+    ['Rename an existing tab', 'yes', 'yes'],
+    ['Delete an existing tab', 'yes', 'no'],
+    ['Contact the admin(s) about an issue', 'no', 'yes'],
     ['Change the connection token / admin password', 'no', 'yes'],
     ['Reminder schedule (day/time) and holidays', 'code', 'code'],
   ];
@@ -789,10 +809,20 @@
     (reportSettings.reminderRecipients || []).forEach((e) => reminderRecipientsContainer.appendChild(buildEmailRow(e)));
 
     document.getElementById('teams-webhook-url').value = reportSettings.teamsWebhookUrl || '';
+
+    const adminContactContainer = document.getElementById('admin-contact-emails-rows');
+    adminContactContainer.innerHTML = '';
+    (reportSettings.adminContactEmails || []).forEach((e) => adminContactContainer.appendChild(buildEmailRow(e)));
+
+    renderRenameTabSelect();
   }
 
   document.getElementById('add-reminder-recipient-btn').addEventListener('click', () => {
     document.getElementById('reminder-recipients-rows').appendChild(buildEmailRow(''));
+  });
+
+  document.getElementById('add-admin-contact-email-btn').addEventListener('click', () => {
+    document.getElementById('admin-contact-emails-rows').appendChild(buildEmailRow(''));
   });
 
   document.getElementById('save-report-settings-btn').addEventListener('click', async () => {
@@ -800,6 +830,7 @@
       hiddenTabs: Array.from(document.querySelectorAll('#hidden-tabs-checks input:checked')).map((c) => c.value),
       reminderRecipients: Array.from(document.querySelectorAll('#reminder-recipients-rows input')).map((i) => i.value.trim()).filter(Boolean),
       teamsWebhookUrl: document.getElementById('teams-webhook-url').value.trim(),
+      adminContactEmails: Array.from(document.querySelectorAll('#admin-contact-emails-rows input')).map((i) => i.value.trim()).filter(Boolean),
     };
     await saveSection('save-report-settings-btn', 'report-settings-err', 'report-settings-ok', () => window.statusApp.saveReportSettings(settings));
     reportSettings = Object.assign({}, reportSettings, settings);
@@ -808,6 +839,49 @@
     // hidden (or un-hidden) here is reflected the next time any of them
     // adds a new row, without needing a full reload.
     liveTabs = allTabs.filter((t) => !settings.hiddenTabs.includes(t));
+  });
+
+  // -------------------- Rename a Tab --------------------
+  //
+  // allTabs, not liveTabs — a currently-hidden tab should still be
+  // renameable. Renaming touches so much server-side (the sheet itself,
+  // plus Categories/Field Types/Report Configs/Report+Hidden tab lists —
+  // see renameTab/renameTabReferences_ in Code.gs) that the simplest
+  // correct thing client-side is a full reload of this screen's data
+  // afterward, rather than trying to patch every in-memory map by hand.
+  function renderRenameTabSelect() {
+    const sel = document.getElementById('rename-tab-select');
+    const previous = sel.value;
+    sel.innerHTML = '';
+    allTabs.forEach((t) => sel.appendChild(new Option(t, t)));
+    if (allTabs.includes(previous)) sel.value = previous;
+  }
+
+  document.getElementById('rename-tab-btn').addEventListener('click', async () => {
+    const oldName = document.getElementById('rename-tab-select').value;
+    const newName = document.getElementById('rename-tab-new-name').value.trim();
+    const errEl = document.getElementById('rename-tab-err');
+    const okEl = document.getElementById('rename-tab-ok');
+    errEl.textContent = '';
+    okEl.textContent = '';
+    if (!oldName) { errEl.textContent = 'Pick a tab to rename.'; return; }
+    if (!newName) { errEl.textContent = 'Enter the new name.'; return; }
+    const btn = document.getElementById('rename-tab-btn');
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Renaming…';
+    try {
+      const result = await window.statusApp.renameTab(oldName, newName);
+      if (!result || result.ok === false) throw new Error((result && result.error) || 'Rename failed.');
+      okEl.textContent = 'Renamed. Reloading…';
+      document.getElementById('rename-tab-new-name').value = '';
+      await loadAndShowContent();
+    } catch (err) {
+      errEl.textContent = err.message || String(err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
   });
 
   // -------------------- Report Configs --------------------

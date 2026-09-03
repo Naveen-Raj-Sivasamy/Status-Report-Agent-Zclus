@@ -292,7 +292,20 @@ async function apiPostBody(body, opts) {
 }
 
 async function apiPost(tab, values, opts) {
-  return apiPostBody({ tab, values }, opts);
+  // Generated ONCE here, not inside apiPostBody's retried closure — every
+  // automatic retry of THIS submit-entry call reuses the same key, so the
+  // backend can recognize "I already did this" instead of appending a
+  // real duplicate row. Aborting the client's fetch on a timeout doesn't
+  // cancel the server-side execution; if the backend is merely slow
+  // rather than actually failing, a bare retry with no way to tell attempt
+  // 2 apart from attempt 1 can make BOTH succeed — reported: one
+  // submission landing 3 times, matching RETRY_ATTEMPTS exactly. A
+  // genuinely new call to apiPost (the user manually re-clicking Submit
+  // after seeing an error, not this function retrying on its own) gets
+  // its own fresh key, so a deliberate resubmission still goes through —
+  // only this-click's own silent retries get deduped, see Code.gs's own
+  // comment on idemKey for the matching server-side half of this.
+  return apiPostBody({ tab, values, idempotencyKey: crypto.randomUUID() }, opts);
 }
 
 // In-memory cache the widget serves from instantly, refreshed in the
@@ -541,9 +554,13 @@ ipcMain.handle('rename-tab', async (_e, { oldName, newName }) => {
   return result;
 });
 // The footer "Contact Admin" form every screen carries — no cache to
-// invalidate, this only ever appends a row server-side.
+// invalidate, this only ever appends a row server-side. idempotencyKey:
+// same reasoning as apiPost's own comment above — generated once per
+// click, reused across THIS call's automatic retries, so a slow-but-
+// eventually-successful backend can't turn one submission into several
+// duplicate tickets (and duplicate admin emails).
 ipcMain.handle('submit-admin-contact', async (_e, payload) =>
-  apiPostBody(Object.assign({ action: 'submitAdminContact' }, payload))
+  apiPostBody(Object.assign({ action: 'submitAdminContact', idempotencyKey: crypto.randomUUID() }, payload))
 );
 // Connect Groups — same doPost/token-gated reasoning as report settings
 // (a webhook URL is a write capability). Group names are synced into

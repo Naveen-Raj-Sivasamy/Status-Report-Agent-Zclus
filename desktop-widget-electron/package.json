@@ -1,6 +1,6 @@
 {
   "name": "status-update-widget",
-  "version": "1.25.4",
+  "version": "1.26.0",
   "description": "Floating tray widget for the Status Report Tracker Agent",
   "main": "main.js",
   "private": true,

@@ -336,9 +336,11 @@ Defaults: reminder at 6pm Friday, report at 11pm Friday, both in the
   `_ReportConfigs`, `ReportTabs`/`HiddenTabs`) in the same step; renaming
   the sheet tab directly only changes the tab itself and leaves those
   pointing at a name that no longer exists.
-- Saving a brand-new landing-screen category (`_Categories`, or the
-  widget's own Categories screen) automatically stubs out a matching
-  Report Config with that category's tabs — disabled and recipient-less
-  until you actually fill it in, but there from the start rather than a
-  manual "now go add a report for it too" step. It never touches a config
-  that already exists under that name.
+- Saving Categories from the widget's own Categories screen (not editing
+  `_Categories` directly — this only runs through that Save action)
+  automatically stubs out a matching Report Config for any category name
+  that's genuinely new in that save — disabled and recipient-less until
+  you actually fill it in, but there from the start rather than a manual
+  "now go add a report for it too" step. It never touches a config that
+  already exists under that name, or restubs a category that was already
+  there before this save (so it's always one small append, not a burst).

@@ -352,12 +352,21 @@ function doPost(e) {
           CacheService.getScriptCache().remove('fieldSchema');
           return jsonOut({ ok: true, message: 'Field types saved.' });
         }
+        // Read BEFORE overwriting — ensureReportConfigsForCategories_ needs
+        // to know which category names are genuinely NEW in this save, not
+        // just "any category missing a same-named config". Every append to
+        // _ReportConfigs is a second sheet write inside this same lock, on
+        // top of _Categories' own write, and this file's own comments
+        // elsewhere document exactly what a pile of writes in one go does
+        // to Sheets (forces a full formula recalc — "stuck on Saving" for
+        // everyone). Diffing against new-vs-old means the very first save
+        // after this feature shipped doesn't retroactively stub a config
+        // for every pre-existing category at once — only an actually-new
+        // one, same size write as any other single-category add.
+        var categoriesBefore = getCategoriesMap();
         writeCategoriesMap(body.categories || {});
         CacheService.getScriptCache().remove('categories');
-        // Every category gets a Report Config by default from here on —
-        // see ensureReportConfigsForCategories_'s own comment for why this
-        // only fills gaps rather than overwriting anything.
-        ensureReportConfigsForCategories_(body.categories || {});
+        ensureReportConfigsForCategories_(body.categories || {}, categoriesBefore);
         return jsonOut({ ok: true, message: 'Categories saved.' });
       } finally {
         writeLock.releaseLock();
@@ -2903,34 +2912,47 @@ function getReportConfigs() {
 
 /** Called from the saveCategories action, right after writeCategoriesMap
  * — so "whatever category gets added, it gets a Report Config by
- * default" isn't a manual second step. For every category name in the
- * map that doesn't already have a matching _ReportConfigs entry (exact
- * name match), appends a stub: that category's current tabs, no
- * recipients, no schedule (manual-only), Enabled = FALSE. It's deliberately
- * OFF and recipient-less by default — the point is that the config
- * already exists and is ready to fill in, not that it starts emailing
- * nobody. Never touches a config that already exists under that name —
- * this only fills gaps, so a config someone's already customized (renamed,
+ * default" isn't a manual second step. For every category name that's in
+ * `categoriesMap` (the just-saved state) but NOT in `previousCategoriesMap`
+ * (what _Categories held before this save) — i.e. a category genuinely
+ * new to THIS save, not just any category that happens to lack a
+ * same-named config — appends a stub: that category's current tabs, no
+ * recipients, no schedule (manual-only), Enabled = FALSE. It's
+ * deliberately OFF and recipient-less by default — the point is that the
+ * config already exists and is ready to fill in, not that it starts
+ * emailing nobody. The old/new diff, not a blanket "any gap" check,
+ * matters for more than being precise about "added": a blanket check
+ * would restub every pre-existing category the very first time this ran
+ * against an established sheet, appending a burst of rows in one go —
+ * exactly the kind of pile-up this file's own comments elsewhere warn
+ * turns into a full-workbook-recalculating, "stuck on Saving for
+ * everyone" write (see the /submit-entry lock's comment). One newly
+ * added category is one small append, same size as any other edit here.
+ * Also never touches a config that already exists under that name — this
+ * only fills gaps, so a config someone's already customized (renamed,
  * repointed at different tabs, given its own recipients) is left alone
  * even if its name still happens to match a category. Appends directly
  * to the sheet rather than going through writeReportConfigs (which
  * replaces every row) since this only ever needs to ADD rows; called
  * from inside saveCategories' own lock, so no locking of its own. */
-function ensureReportConfigsForCategories_(categoriesMap) {
-  var existingNames = getReportConfigs().map(function (c) { return c.name; });
+function ensureReportConfigsForCategories_(categoriesMap, previousCategoriesMap) {
+  var previousNames = Object.keys(previousCategoriesMap || {}).map(function (n) { return String(n).trim(); });
+  var existingConfigNames = getReportConfigs().map(function (c) { return c.name; });
   ensureReportConfigsTab();
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(REPORT_CONFIGS_TAB_NAME);
   var newRows = [];
   Object.keys(categoriesMap || {}).forEach(function (categoryName) {
     var category = String(categoryName).trim();
-    if (!category || existingNames.indexOf(category) !== -1) return;
+    if (!category) return;
+    if (previousNames.indexOf(category) !== -1) return; // existed before this save — not what "added" means here
+    if (existingConfigNames.indexOf(category) !== -1) return; // already has a config, new or not
     var tabs = categoriesMap[categoryName] || [];
     tabs.forEach(function (tabName) {
       var tab = String(tabName).trim();
       if (!tab) return;
       newRows.push([category, tab, '', '', '', '', 'FALSE']);
     });
-    existingNames.push(category); // one stub per category, even with duplicate rows in the map
+    existingConfigNames.push(category); // one stub per category, even with duplicate rows in the map
   });
   if (newRows.length) {
     sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, REPORT_CONFIGS_COLUMNS.length).setValues(newRows);

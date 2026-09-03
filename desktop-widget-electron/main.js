@@ -767,7 +767,7 @@ ipcMain.handle('open-connection-settings', () => {
   // it's still an active surface sitting above it. Get it out of the way
   // whenever a screen it launched is about to show, same as it already
   // does to the floating icon when the popup itself opens.
-  if (popup && popup.isVisible()) hidePopup();
+  if (popup && popup.isVisible()) hidePopup(false); // connectWin's own 'closed' handler brings the icon back
   if (!connectWin || connectWin.isDestroyed()) {
     connectWin = createConnectWindow();
   } else {
@@ -805,6 +805,11 @@ function createConnectWindow() {
   wireWindowSizePersistence(win, 'connect');
   win.on('closed', () => {
     if (connectWin === win) connectWin = null;
+    // Mirrors the hidePopup(false) that suppressed this when THIS window
+    // opened (see open-connection-settings) — that only deferred bringing
+    // the icon back, it didn't cancel it. Someone needs to; the popup
+    // itself is still hidden and won't do it on its own.
+    if (floatBtn) floatBtn.show();
   });
   return win;
 }
@@ -904,7 +909,7 @@ ipcMain.handle('set-user-role', async (_e, { username, role }) => {
 ipcMain.handle('open-manage-screen', () => {
   // Same reasoning as open-connection-settings above — the alwaysOnTop
   // popup would otherwise float over this window and eat its input.
-  if (popup && popup.isVisible()) hidePopup();
+  if (popup && popup.isVisible()) hidePopup(false); // manageWin's own 'closed' handler brings the icon back
   if (!manageWin || manageWin.isDestroyed()) {
     manageWin = createManageWindow();
   } else {
@@ -938,6 +943,8 @@ function createManageWindow() {
   wireWindowSizePersistence(win, 'manage');
   win.on('closed', () => {
     if (manageWin === win) manageWin = null;
+    // Same reasoning as createConnectWindow's own 'closed' handler above.
+    if (floatBtn) floatBtn.show();
   });
   return win;
 }
@@ -1013,9 +1020,21 @@ function positionPopupNearWindow(refBounds) {
   popup.setPosition(x, y, false);
 }
 
-function hidePopup() {
+// restoreFloatBtn=false is for open-connection-settings/open-manage-screen
+// below: they hide the popup only to get it out from under a DIFFERENT
+// window they're about to show (it's alwaysOnTop, see their own comments),
+// not because the user is actually done with the app. Bringing the
+// floating icon back in that case made it reappear ON TOP of that other
+// window instead — floatBtn is itself alwaysOnTop too — which is exactly
+// the "why is this icon covering the screen I just opened" bug. Every
+// other caller (the popup's own ✕, or toggling it closed) leaves this at
+// its default true: nothing else is about to show, so the icon SHOULD
+// come back as the way to reopen the app. Whichever window suppressed it
+// is responsible for bringing it back itself once IT closes — see
+// createConnectWindow/createManageWindow's own 'closed' handlers.
+function hidePopup(restoreFloatBtn = true) {
   popup.hide();
-  if (floatBtn) floatBtn.show(); // bring the floating icon back once the form is closed
+  if (restoreFloatBtn && floatBtn) floatBtn.show();
 }
 
 function toggleWindow() {

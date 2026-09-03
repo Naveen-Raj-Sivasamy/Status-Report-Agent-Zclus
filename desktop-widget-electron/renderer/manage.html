@@ -245,6 +245,12 @@
       <div id="admin-contact-emails-rows"></div>
       <button class="icon-btn" type="button" id="add-admin-contact-email-btn">+ Add email</button>
 
+      <label style="display:flex; align-items:center; gap:6px; font-size:12px; margin-top:16px; cursor:pointer;">
+        <input type="checkbox" id="disable-weekly-connect-check" />
+        Disable Weekly Connect
+      </label>
+      <p class="hint" style="margin: 4px 0 0;">Stops the Weekly_Connect tab (and its landing-screen category) from auto-recreating itself. Turn this on FIRST, save, THEN delete the tab and its rows on Categories — deleting it before this is on just gets it recreated on the next tab-list refresh.</p>
+
       <div class="row-actions">
         <button id="save-report-settings-btn">Save App Settings</button>
       </div>
@@ -308,7 +314,7 @@
   let fieldSchemaMap = {};
   let categoriesMap = {};
   let allTabs = []; // every real tab, including currently-hidden ones — Report Settings/Report Configs both need this
-  let reportSettings = { hiddenTabs: [], reminderRecipients: [], teamsWebhookUrl: '', adminContactEmails: [] };
+  let reportSettings = { hiddenTabs: [], reminderRecipients: [], teamsWebhookUrl: '', adminContactEmails: [], disableWeeklyConnect: false };
   // [{name, tabs: [{tab, fields: [...]}], recipients: [...], scheduleDay, scheduleHour, enabled}, ...]
   let reportConfigs = [];
   let connectGroups = []; // [{name, webhookUrl}, ...]
@@ -823,6 +829,8 @@
     adminContactContainer.innerHTML = '';
     (reportSettings.adminContactEmails || []).forEach((e) => adminContactContainer.appendChild(buildEmailRow(e)));
 
+    document.getElementById('disable-weekly-connect-check').checked = !!reportSettings.disableWeeklyConnect;
+
     renderRenameTabSelect();
   }
 
@@ -840,6 +848,7 @@
       reminderRecipients: Array.from(document.querySelectorAll('#reminder-recipients-rows input')).map((i) => i.value.trim()).filter(Boolean),
       teamsWebhookUrl: document.getElementById('teams-webhook-url').value.trim(),
       adminContactEmails: Array.from(document.querySelectorAll('#admin-contact-emails-rows input')).map((i) => i.value.trim()).filter(Boolean),
+      disableWeeklyConnect: document.getElementById('disable-weekly-connect-check').checked,
     };
     await saveSection('save-report-settings-btn', 'report-settings-err', 'report-settings-ok', () => window.statusApp.saveReportSettings(settings));
     reportSettings = Object.assign({}, reportSettings, settings);

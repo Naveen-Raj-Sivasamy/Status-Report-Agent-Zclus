@@ -502,13 +502,36 @@ function doPost(e) {
       var userAffected = String(body.userAffected || '').trim();
       var explanation = String(body.explanation || '').trim();
 
+      // Same reasoning as the generic tab-submit handler's own idemKey
+      // comment — a slow-but-eventually-successful backend can make every
+      // automatic retry of this one click independently append a row AND
+      // send a real email, not just one. Checked/set around the append
+      // only (not the email below, which stays best-effort and outside
+      // the lock) — that's the part a duplicate would actually corrupt
+      // data over; a genuinely resent email is merely annoying, and this
+      // still stops even that in the common case since a deduped retry
+      // returns before ever reaching the email step at all.
+      var contactIdemKey = body.idempotencyKey ? 'submitAdminContact:' + String(body.idempotencyKey).trim() : '';
+      var contactIdemCache = CacheService.getScriptCache();
+      if (contactIdemKey) {
+        var contactAlreadyDone = contactIdemCache.get(contactIdemKey);
+        if (contactAlreadyDone) return ContentService.createTextOutput(contactAlreadyDone).setMimeType(ContentService.MimeType.JSON);
+      }
+
       var contactLock = LockService.getScriptLock();
       if (!contactLock.tryLock(LOCK_WAIT_MS)) {
         return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
       }
       try {
+        if (contactIdemKey) {
+          var contactAlreadyDoneInLock = contactIdemCache.get(contactIdemKey);
+          if (contactAlreadyDoneInLock) return ContentService.createTextOutput(contactAlreadyDoneInLock).setMimeType(ContentService.MimeType.JSON);
+        }
         var ticketSheet = ensureSupportTicketsTab_();
         ticketSheet.appendRow([new Date(), requester, userAffected, issue, explanation, '']);
+        if (contactIdemKey) {
+          contactIdemCache.put(contactIdemKey, JSON.stringify({ ok: true, message: 'Sent to admin(s) and logged.' }), 300);
+        }
       } finally {
         contactLock.releaseLock();
       }
@@ -779,6 +802,30 @@ function doPost(e) {
       return Object.prototype.hasOwnProperty.call(values, col) ? values[col] : '';
     });
 
+    /** Aborting the client's fetch on a timeout does NOT cancel this
+     * execution — Apps Script keeps running and can still finish
+     * sheet.appendRow(row) below regardless of whether the client gave up
+     * waiting for the response. main.js's own retry (up to 3 attempts,
+     * same body every time) has no way to tell "the last attempt actually
+     * went through, just slowly" apart from "the last attempt genuinely
+     * failed" — so when the backend is merely SLOW rather than actually
+     * erroring, every retry can independently succeed, each one a real
+     * extra row. Reported: one submission landing 3 times, matching
+     * RETRY_ATTEMPTS exactly. idempotencyKey (a UUID the client generates
+     * ONCE per submit-button-click, reused across that click's own
+     * automatic retries, but not across a genuinely new manual Retry —
+     * see submitEntry in main.js) is what lets a retry recognize "I've
+     * already done this" and hand back the same answer instead of
+     * appending again. Keyed by the RESULT (success OR the Leave-conflict
+     * error below), not just success, so a retried conflict replays the
+     * same conflict message instead of re-running findLeaveDateConflict. */
+    var idemKey = body.idempotencyKey ? 'submitEntry:' + String(body.idempotencyKey).trim() : '';
+    var idemCache = CacheService.getScriptCache();
+    if (idemKey) {
+      var alreadyDone = idemCache.get(idemKey);
+      if (alreadyDone) return ContentService.createTextOutput(alreadyDone).setMimeType(ContentService.MimeType.JSON);
+    }
+
     // Without a lock, two people submitting within the same second or two
     // (common right before the Friday cutoff) race on appendRow, and on top
     // of that every append forces Sheets to recalculate every formula in
@@ -793,7 +840,15 @@ function doPost(e) {
     if (!lock.tryLock(LOCK_WAIT_MS)) {
       return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
     }
+    var resultObj;
     try {
+      // Re-checked INSIDE the lock — closes the race where two
+      // near-simultaneous retries both pass the fast-path check above
+      // before either has actually written the cache entry yet.
+      if (idemKey) {
+        var alreadyDoneInLock = idemCache.get(idemKey);
+        if (alreadyDoneInLock) return ContentService.createTextOutput(alreadyDoneInLock).setMimeType(ContentService.MimeType.JSON);
+      }
       // Checked INSIDE the lock, not before it — two people submitting
       // leave for the same date within the same second or two would
       // otherwise both pass a "is this date free" check done before
@@ -802,10 +857,20 @@ function doPost(e) {
       if (body.tab === LEAVE_TAB_NAME) {
         var conflictName = findLeaveDateConflict(headers, sheet, values);
         if (conflictName) {
-          return jsonOut({ ok: false, error: conflictName + ' has already applied for leave on this date.' });
+          resultObj = { ok: false, error: conflictName + ' has already applied for leave on this date.' };
         }
       }
-      sheet.appendRow(row);
+      if (!resultObj) {
+        sheet.appendRow(row);
+        resultObj = { ok: true, message: 'Saved to "' + body.tab + '".' };
+      }
+      // 300s comfortably covers the retry window (3 attempts, exponential
+      // backoff up to a few seconds apart, each bounded by a 15s client
+      // timeout) with room to spare — long enough to dedupe every retry
+      // of THIS click, short enough that a genuinely new submission
+      // minutes later (a fresh idempotencyKey anyway, but belt-and-braces)
+      // is never mistaken for a repeat.
+      if (idemKey) idemCache.put(idemKey, JSON.stringify(resultObj), 300);
     } finally {
       lock.releaseLock();
     }
@@ -820,16 +885,18 @@ function doPost(e) {
     // Generator already uses — see the ticket list screen's "Post to
     // Teams" button.
 
-    // Best-effort, after the lock is already released — see logAudit_'s
-    // own comment for why this never blocks or fails the actual save.
-    // A short, generic summary (first few populated fields) rather than
-    // anything per-tab special-cased, since this runs for every tab.
-    var auditSummary = headers.slice(0, 3).map(function (h) {
-      return values[h] ? h + ': ' + String(values[h]).slice(0, 40) : null;
-    }).filter(Boolean).join(', ');
-    logAudit_(body.sessionToken, 'submit', body.tab, auditSummary || 'New entry added.');
+    if (resultObj.ok) {
+      // Best-effort, after the lock is already released — see logAudit_'s
+      // own comment for why this never blocks or fails the actual save.
+      // A short, generic summary (first few populated fields) rather than
+      // anything per-tab special-cased, since this runs for every tab.
+      var auditSummary = headers.slice(0, 3).map(function (h) {
+        return values[h] ? h + ': ' + String(values[h]).slice(0, 40) : null;
+      }).filter(Boolean).join(', ');
+      logAudit_(body.sessionToken, 'submit', body.tab, auditSummary || 'New entry added.');
+    }
 
-    return jsonOut({ ok: true, message: 'Saved to "' + body.tab + '".' });
+    return jsonOut(resultObj);
   } catch (err) {
     return jsonOut({ ok: false, error: String(err) });
   }

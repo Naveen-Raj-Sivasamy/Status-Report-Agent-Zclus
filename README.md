@@ -379,3 +379,22 @@ Defaults: reminder at 6pm Friday, report at 11pm Friday, both in the
   covers what blocks that very first screen (tabs + categories) — Manage
   Fields' other reads stay in-memory-only, since that screen now shows a
   real error + Retry instead of silently staying blank on a failed load.
+- A submission (or a Contact Admin ticket) can't land more than once from
+  a single click, even when the backend is slow enough that a retry looks
+  necessary. Aborting the client's fetch on a timeout doesn't cancel the
+  matching Apps Script execution — it can keep running and finish the
+  actual write regardless — so a bare retry (same request, no way to tell
+  "already done" from "genuinely failed") could turn one click into
+  several real rows once the backend was merely slow rather than actually
+  erroring (confirmed: a submission landing 3 times, matching
+  RETRY_ATTEMPTS exactly). Each submit-entry/submitAdminContact call now
+  carries a client-generated idempotencyKey, the same one reused across
+  that click's own automatic retries — the backend remembers the outcome
+  (success or a genuine error, e.g. Leave's date conflict) for 5 minutes
+  and replays it instead of writing again. A deliberate manual resubmit
+  (re-clicking Submit after an error screen) still goes through as a real
+  new entry — it's a fresh click, a fresh key. This only takes effect once
+  BOTH halves are on a build that has it — an old client never sends the
+  key at all, so the backend has nothing to dedupe against; existing
+  duplicate rows from before this shipped need a manual cleanup, this
+  doesn't retroactively remove anything already written.

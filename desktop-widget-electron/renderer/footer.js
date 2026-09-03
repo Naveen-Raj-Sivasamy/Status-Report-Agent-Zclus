@@ -69,14 +69,27 @@
     bar.style.cssText =
       'flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:6px;' +
       'padding:7px 10px; font-size:11px; background:rgba(0,0,0,0.15); color:#e8c9cf;' +
-      '-webkit-app-region:no-drag;';
+      // A second grab point for the window, opposite the header (which is
+      // the only place that's ever been draggable — see main.js/index.html
+      // for the popup) — this bar sits at the true bottom of #card on
+      // every screen regardless of which one's showing, so there's always
+      // a spot to drag from that isn't at the very top edge. That matters
+      // on a call: if the popup gets dragged flush against the top of the
+      // screen, a meeting app's own floating toolbar (which also lives at
+      // the top) can sit right over the header and eat the drag — this
+      // strip is the way back down without needing to stop sharing first.
+      // The actual button below still needs its own no-drag override so
+      // clicking it opens the form instead of moving the window.
+      '-webkit-app-region:drag; cursor:move;';
     const label = document.createElement('span');
     label.textContent = 'Something not working?';
     const link = document.createElement('button');
     link.type = 'button';
     link.id = 'kc-contact-admin-link';
     link.textContent = 'Contact Admin';
-    link.style.cssText = 'all:unset; cursor:pointer; color:' + ACCENT + '; font-weight:700; text-decoration:underline;';
+    link.style.cssText =
+      'all:unset; cursor:pointer; color:' + ACCENT + '; font-weight:700; text-decoration:underline;' +
+      '-webkit-app-region:no-drag;';
     bar.appendChild(label);
     bar.appendChild(link);
 

@@ -86,6 +86,15 @@
   .group-header input { flex: 1; }
   .opt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
   .opt-row input { flex: 1; }
+  /* The group-header row's delete button ("✕ Remove list") is wider than
+     an option row's ("✕") — since both buttons sit next to a flex:1 input,
+     the wider one silently ate more space from ITS input than the ✕
+     buttons did from theirs, so the header input's right edge landed
+     visibly short of every option-row input below it (the "field
+     stretching looks odd" a group of these renders as). Same fixed width
+     on both button kinds — a plain ✕ just ends up centered in the extra
+     room — makes every input in the group end at the same edge. */
+  .opt-del-btn { width: 100px; text-align: center; flex-shrink: 0; }
   .chip-group { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
   button.chip { background: rgba(255,255,255,0.1); color: #e8c9cf; border: 1px solid rgba(255,255,255,0.25); padding: 4px 10px; border-radius: 999px; font-size: 11.5px; }
   button.chip:hover { border-color: rgba(255,255,255,0.5); color: #ffffff; }
@@ -444,7 +453,7 @@
     input.placeholder = 'Option value';
     const del = document.createElement('button');
     del.type = 'button';
-    del.className = 'icon-btn';
+    del.className = 'icon-btn opt-del-btn';
     del.textContent = '✕';
     del.onclick = () => row.remove();
     row.appendChild(input);
@@ -464,7 +473,7 @@
     keyInput.placeholder = 'OptionsKey (e.g. SITES)';
     const delKeyBtn = document.createElement('button');
     delKeyBtn.type = 'button';
-    delKeyBtn.className = 'icon-btn';
+    delKeyBtn.className = 'icon-btn opt-del-btn';
     delKeyBtn.textContent = '✕ Remove list';
     delKeyBtn.onclick = () => group.remove();
     header.appendChild(keyInput);

@@ -1832,6 +1832,13 @@
   // instead of the browser-download link, since there's nothing left to
   // download. Mac has no such state (no auto-update there — see the
   // comment in main.js), so isUpdateReadyToInstall() is always false.
+  //
+  // Kept as a soft, non-blocking header link (not the hard gate below) —
+  // this only fires via onUpdateDownloaded, i.e. a download that finished
+  // WHILE this popup was already open, possibly mid-form. Interrupting
+  // that specific moment was the one thing the original "never force
+  // anyone mid-task" design was actually protecting; the hard gate below
+  // only ever runs at open time, when there's nothing mid-task to lose.
   function showUpdateReadyToInstall(version) {
     els.updateLink.textContent = 'Restart to update';
     els.updateLink.title = version ? `Update ready — v${version}` : 'Update downloaded — click to restart and install';
@@ -1839,35 +1846,72 @@
     els.updateLink.classList.add('visible');
   }
 
-  async function checkAppVersion() {
+  // Fires whenever a background download finishes WHILE this popup is
+  // open (the Windows-only autoUpdater check on a timer in main.js isn't
+  // tied to the popup being open at all) — flips the banner over live,
+  // same end state as checkForcedUpdateGate() finding it already downloaded.
+  window.statusApp.onUpdateDownloaded(() => showUpdateReadyToInstall());
+
+  // The hard gate: replaces the whole screen with an update prompt and
+  // hides Settings, leaving only the update action itself and the
+  // Contact Admin footer (footer.js is a sibling of #main, untouched by
+  // this) clickable. This is a deliberate reversal of the old "never
+  // force anyone mid-task" policy above — that was fine as long as
+  // running an old build just meant missing new features, but a build
+  // old enough to predate a backend change can sit there submitting into
+  // a permanent "Saving..." with no obvious reason why, which is worse
+  // than an interruption. Runs ONLY at popup-open time (initial load and
+  // every onOpened — see below), never mid-session, so it never yanks a
+  // form out from under someone already using the app; the live
+  // in-session case above stays a soft link on purpose. A version check
+  // that itself fails (offline, backend hiccup) fails OPEN — never lock
+  // someone out over the check failing, only over a genuinely confirmed
+  // newer version.
+  //
+  // A build old enough to predate this gate (and the version-check code
+  // itself) can't be reached by any of this — there's no code running on
+  // that machine to trigger it. Someone stuck like that needs one manual
+  // reinstall of the current installer; after that, this gate (and
+  // Windows' silent auto-update) covers them going forward.
+  function showForcedUpdateGate({ ready, version, downloadUrl }) {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.settingsBtn.style.display = 'none';
+    els.sub.textContent = 'Update required';
+    els.main.style.minHeight = '';
+    els.main.innerHTML = `
+      <p class="login-hint">${ready
+        ? 'A newer version has already downloaded in the background — restart to finish updating and continue.'
+        : `A newer version${version ? ` (v${escapeHtml(version)})` : ''} is available. This build is no longer supported — update to continue.`}</p>
+      <button class="primary" id="force-update-btn" style="width:100%;">${ready ? 'Restart to update' : 'Download update'}</button>
+      <p class="login-hint" style="margin-top:10px;">Can't update right now? Use "Contact Admin" below.</p>
+    `;
+    document.getElementById('force-update-btn').onclick = () => {
+      if (ready) window.statusApp.quitAndInstall();
+      else if (downloadUrl) window.statusApp.openExternal(downloadUrl);
+    };
+  }
+
+  async function checkForcedUpdateGate() {
     try {
       const version = await window.statusApp.getAppVersion();
       els.versionBadge.textContent = `v${version}`;
 
       if (await window.statusApp.isUpdateReadyToInstall()) {
-        showUpdateReadyToInstall();
-        return;
+        showForcedUpdateGate({ ready: true });
+        return true;
       }
 
       const latest = await window.statusApp.checkLatestVersion();
       if (latest && latest.ok && latest.latest && isNewerVersion(latest.latest, version)) {
-        const downloadUrl = latest.downloadUrl;
-        els.updateLink.title = `Update available — v${latest.latest}`;
-        els.updateLink.onclick = () => {
-          if (downloadUrl) window.statusApp.openExternal(downloadUrl);
-        };
-        els.updateLink.classList.add('visible');
+        showForcedUpdateGate({ ready: false, version: latest.latest, downloadUrl: latest.downloadUrl });
+        return true;
       }
     } catch {
-      /* best-effort — never block the app over a version check */
+      /* best-effort — never block the app over a version check that itself failed */
     }
+    return false;
   }
-
-  // Fires whenever a background download finishes WHILE this popup is
-  // open (the Windows-only autoUpdater check on a timer in main.js isn't
-  // tied to the popup being open at all) — flips the banner over live,
-  // same end state as checkAppVersion() finding it already downloaded.
-  window.statusApp.onUpdateDownloaded(() => showUpdateReadyToInstall());
 
   // Fire-and-forget, same as getYourName below — main.js already caches
   // this in memory (stale-while-revalidate), so calling it again on every
@@ -1898,6 +1942,10 @@
     yourName = await window.statusApp.getYourName();
     refreshLiveOptions();
     refreshLiveFieldSchema();
+    // Version gate first, every time the popup opens — an update that
+    // finished downloading (or shipped) while this was closed should
+    // block before anything else, same reasoning as checkLoginGate.
+    if (await checkForcedUpdateGate()) return;
     // a fresh open always starts at the top, not wherever it was left last
     // time — unless checkLoginGate finds a login is now needed, in which
     // case that's the top instead.
@@ -1907,8 +1955,10 @@
   window.statusApp.getYourName().then((n) => (yourName = n));
   refreshLiveOptions();
   refreshLiveFieldSchema();
-  checkAppVersion();
-  checkLoginGate().then((gated) => { if (!gated) showCategoryPicker(); });
+  checkForcedUpdateGate().then((gated) => {
+    if (gated) return;
+    checkLoginGate().then((loginGated) => { if (!loginGated) showCategoryPicker(); });
+  });
 
   // Keep the actual OS window sized to whatever's on screen right now,
   // instead of a fixed height that leaves dead space for a short screen

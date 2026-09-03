@@ -280,23 +280,37 @@ the same right-click-to-open workaround described above.
 - **Windows** (the primary platform): fully silent, via `electron-updater`.
   The app checks GitHub for a newer release at launch and every 4 hours in
   the background; if one exists it downloads it silently, no click needed.
-  Once the download finishes, the popup's update link changes to
-  **"Restart to update"** — one click quits the app, installs, and relaunches
-  it. Nothing is ever forced on a teammate mid-task: it only installs when
-  they click that link (or the next time they quit the app normally, since
-  `autoInstallOnAppQuit` is on).
 - **Mac**: still the old manual flow. Auto-update needs a code-signed,
   notarized build (Squirrel.Mac's requirement), which this project doesn't
   have — see the unsigned-build note above. `main.js` never runs the
-  background check on Mac; instead the popup keeps comparing its own
-  version against `_Config`'s `LatestVersion` (the same field the workflow
-  above updates) and shows an **"Update available"** link that opens the
-  `.dmg` download page for a manual re-install.
+  background check on Mac; the popup instead compares its own version
+  against `_Config`'s `LatestVersion` (the same field the workflow above
+  updates) directly.
 
   Note this only applies going forward: a teammate on a version that
-  predates this auto-update mechanism still needs one last manual
-  `.exe` download to get onto an auto-updating build — after that,
-  Windows updates become silent.
+  predates this auto-update mechanism (or the gate below) still needs one
+  last manual `.exe` download to get onto an auto-updating, gated build —
+  after that, Windows updates become silent and the gate applies.
+
+**Whether that update is optional or required also differs by moment, not
+just by platform** — both are checked against `_Config`'s `LatestVersion`,
+but the two checks fire at different times on purpose:
+
+- **A download finishing while the popup is already open** (Windows,
+  mid-session) only ever flips the header link to **"Restart to
+  update"** — non-blocking, since there could be a half-filled form on
+  screen and yanking it away mid-task is worse than a slightly stale
+  client for a few more minutes.
+- **Every time the popup opens** (a fresh launch, or reopening the tray
+  icon — never mid-task, since "a fresh open always starts at the top" is
+  already this app's own rule), it checks again and this time **hard
+  gates**: the whole screen becomes an update prompt, Settings is hidden,
+  and only the update action (or the Contact Admin footer) is clickable.
+  There's no "keep using an old build" option any more, on purpose — a
+  build that's fallen behind an actual backend/schema change can sit
+  there submitting into a "Saving…" that never resolves, with nothing on
+  screen explaining why. Going forward, only the latest version is
+  actually usable.
 
 ## 5. Adjust the schedule
 

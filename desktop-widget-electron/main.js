@@ -58,6 +58,13 @@ const POSITION_PATH = path.join(app.getPath('userData'), 'float-position.json');
 // resizable, and whatever size someone drags them to sticks across opens
 // instead of reverting to the shipped default every time.
 const WINDOW_SIZES_PATH = path.join(app.getPath('userData'), 'window-sizes.json');
+// Last-known-good tabs/categories, written to disk every time a live fetch
+// actually succeeds — see tabsCache/categoriesCache below for why this
+// exists: without it, a fresh app launch (nothing in memory yet) has
+// nothing to fall back on if the backend happens to be slow right then,
+// so the very first thing anyone sees is a blocking wait (worst case,
+// every retry timing out) instead of the app they used five minutes ago.
+const OFFLINE_CACHE_PATH = path.join(app.getPath('userData'), 'offline-cache.json');
 // Connection details entered through the app itself (the "Connect to your
 // organization" screen) — this is what makes a store-distributed build
 // (no config.template.json baked in at all) work: whoever installs it
@@ -159,6 +166,27 @@ function saveUserConfig(patch) {
     fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(Object.assign(loadUserConfig(), patch)));
   } catch {
     /* best-effort */
+  }
+}
+
+// Same read-modify-write, best-effort shape as loadUserConfig/
+// saveUserConfig above — a separate file rather than folding into that
+// one since this holds a full tabs/categories payload (potentially much
+// bigger than a name/session token) and gets rewritten far more often
+// (every successful fetch, not just a rare settings change).
+function loadOfflineCache() {
+  try {
+    return JSON.parse(fs.readFileSync(OFFLINE_CACHE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveOfflineCache(patch) {
+  try {
+    fs.writeFileSync(OFFLINE_CACHE_PATH, JSON.stringify(Object.assign(loadOfflineCache(), patch)));
+  } catch {
+    /* best-effort — worst case, the next launch just has nothing to fall back on either */
   }
 }
 
@@ -272,16 +300,31 @@ async function apiPost(tab, values, opts) {
 // just to show the tab list it already showed a minute ago. The Apps
 // Script side still caches for 5 minutes too, so a background refresh here
 // is cheap even when it does need to hit the network.
-let tabsCache = null;
+//
+// tabsCache/categoriesCache start seeded from disk (see OFFLINE_CACHE_PATH)
+// instead of null — an in-memory-only cache is empty again on every fresh
+// launch, which is exactly when a slow/unresponsive backend hurts most:
+// there's nothing to fall back on yet, so the very first screen anyone
+// sees blocks on a live round trip (worst case, every retry timing out —
+// reported: "user can't wait for a minute to check"). Seeding from
+// whatever last actually succeeded means a cold launch renders instantly
+// even when the backend is currently having a bad moment, same as any
+// other stale-while-revalidate cache, just surviving a restart too.
+// columnsCache/optionsCache/fieldSchemaCache stay in-memory-only — this
+// isn't about caching everything, just the two calls that block the
+// first thing every single app open shows.
+const offlineCache = loadOfflineCache();
+let tabsCache = offlineCache.tabsCache || null;
 let columnsCache = {}; // tab -> columns[]
 let optionsCache = null; // dropdown/multiselect option lists from the _Options tab
 let fieldSchemaCache = null; // which fields get which widget type, from the _FieldSchema tab
-let categoriesCache = null; // landing-screen tab grouping, from the _Categories tab
+let categoriesCache = offlineCache.categoriesCache || null; // landing-screen tab grouping, from the _Categories tab
 
 async function refreshTabsCache() {
   try {
     const data = await apiGet({ action: 'tabs' });
     tabsCache = data;
+    saveOfflineCache({ tabsCache: data });
     return data;
   } catch (err) {
     if (tabsCache) return tabsCache; // stale is better than nothing
@@ -326,6 +369,7 @@ async function refreshCategoriesCache() {
   try {
     const data = await apiGet({ action: 'categories' });
     categoriesCache = data;
+    saveOfflineCache({ categoriesCache: data });
     return data;
   } catch (err) {
     if (categoriesCache) return categoriesCache; // stale is better than nothing

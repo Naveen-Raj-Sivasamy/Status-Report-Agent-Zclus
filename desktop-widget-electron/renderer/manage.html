@@ -180,6 +180,18 @@
     <h2>Manage Fields &amp; Options</h2>
     <p class="hint">Changes save straight to your connected Sheet — no code, no redeploy. Each section below saves independently.</p>
 
+    <!-- Hidden unless the initial load itself fails (a slow/unreachable
+         Sheet, same TimeoutError the main popup already surfaces with its
+         own Retry) — every section below stays in its empty starting
+         state until this succeeds, which used to happen completely
+         silently: the gate was already hidden and #content already
+         shown by the time the fetch below could fail, so there was
+         nothing on screen telling you why nothing loaded. -->
+    <div class="section" id="load-error-section" hidden>
+      <p class="err" id="load-error-msg"></p>
+      <button id="load-retry-btn">Retry</button>
+    </div>
+
     <div class="section">
       <h3>Where can I make each kind of change?</h3>
       <p class="hint">Same information either way — this app and the Sheet's own <code>_Features</code> tab both show it.</p>
@@ -354,15 +366,33 @@
     document.getElementById('gate').classList.add('hidden');
     document.getElementById('content').classList.remove('hidden');
     renderCompareTable(); // static — doesn't need the fetches below
-    const [tabsRes, optsRes, fsRes, catRes, reportRes, configsRes, groupsRes] = await Promise.all([
-      window.statusApp.getTabs(),
-      window.statusApp.getOptions(),
-      window.statusApp.getFieldSchema(),
-      window.statusApp.getCategories(),
-      window.statusApp.getReportSettings(),
-      window.statusApp.getReportConfigs(),
-      window.statusApp.getConnectGroups(),
-    ]);
+
+    const errorSection = document.getElementById('load-error-section');
+    const errorMsg = document.getElementById('load-error-msg');
+    errorSection.hidden = true;
+
+    let tabsRes, optsRes, fsRes, catRes, reportRes, configsRes, groupsRes;
+    try {
+      [tabsRes, optsRes, fsRes, catRes, reportRes, configsRes, groupsRes] = await Promise.all([
+        window.statusApp.getTabs(),
+        window.statusApp.getOptions(),
+        window.statusApp.getFieldSchema(),
+        window.statusApp.getCategories(),
+        window.statusApp.getReportSettings(),
+        window.statusApp.getReportConfigs(),
+        window.statusApp.getConnectGroups(),
+      ]);
+    } catch (err) {
+      // Was a silent dead end: the gate above is already hidden and
+      // #content already shown by this point, so a rejection here used
+      // to just leave every section sitting at its empty starting state
+      // forever with nothing on screen explaining why — same class of
+      // "Couldn't reach the sheet" the main popup already shows a real
+      // Retry for, just missing here. This IS that.
+      errorMsg.textContent = 'Couldn\'t load — ' + (err.message || String(err));
+      errorSection.hidden = false;
+      return;
+    }
     liveTabs = (tabsRes && tabsRes.tabs) || [];
     optionsMap = (optsRes && optsRes.options) || {};
     fieldSchemaMap = (fsRes && fsRes.fieldSchema) || {};

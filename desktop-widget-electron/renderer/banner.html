@@ -71,7 +71,11 @@
      shown or hidden as a whole. */
   #stage {
     position: relative;
-    height: 96px;
+    /* Base height for one runner lane — startStage() grows this inline
+       (style.height) when there's more than one person on leave, so
+       extra people get their own lane instead of taking turns, without
+       needing a separate CSS rule per lane count. */
+    height: 88px;
     margin: 0 16px 10px 16px;
     border-radius: 12px;
     background: rgba(255,255,255,0.07);
@@ -94,8 +98,8 @@
   }
   @keyframes rocket-launch {
     0%   { bottom: -14px; opacity: 1; transform: translateX(-50%) rotate(0deg); }
-    65%  { bottom: 60px;  opacity: 1; transform: translateX(-50%) rotate(-8deg); }
-    100% { bottom: 68px;  opacity: 0; transform: translateX(-50%) rotate(-8deg); }
+    65%  { bottom: 50px;  opacity: 1; transform: translateX(-50%) rotate(-8deg); }
+    100% { bottom: 58px;  opacity: 0; transform: translateX(-50%) rotate(-8deg); }
   }
 
   #sparks {
@@ -123,15 +127,22 @@
     100% { opacity: 0; transform: rotate(var(--angle)) translateX(var(--dist)); }
   }
 
+  /* Fills the whole stage (not just a fixed-height strip at the bottom)
+     so each .runner-lane below can position itself with its own `bottom`
+     offset — that's what lets multiple people stack into separate lanes
+     instead of only ever having room for one. */
   #runner-track {
     position: absolute;
     left: 0; right: 0;
-    bottom: 8px;
-    height: 44px;
+    top: 0; bottom: 0;
   }
-  #runner {
+  /* One of these per person on leave today (built in JS — see
+     buildRunnerLane()), all running at once rather than taking turns, per
+     feedback that "in sequence" read as one runner stalling/disappearing
+     before the next started. */
+  .runner-lane {
     position: absolute;
-    bottom: 0;
+    bottom: 8px;
     left: -44px;
     display: flex;
     flex-direction: column;
@@ -139,7 +150,7 @@
     gap: 3px;
     opacity: 0;
   }
-  #runner.running {
+  .runner-lane.running {
     animation: run-across 3.2s linear forwards;
   }
   @keyframes run-across {
@@ -147,7 +158,7 @@
     92%  { opacity: 1; }
     100% { left: 100%;  opacity: 0; }
   }
-  #runner-name {
+  .runner-name {
     font-size: 10px;
     font-weight: 700;
     padding: 2px 8px;
@@ -156,10 +167,10 @@
     white-space: nowrap;
     box-shadow: 0 1px 3px rgba(0,0,0,0.3);
   }
-  #runner-name.boy { background: #2f6fed; }
-  #runner-name.girl { background: #e05aa0; }
-  #runner-name.neutral { background: #7a6a90; }
-  #runner-badge {
+  .runner-name.boy { background: #2f6fed; }
+  .runner-name.girl { background: #e05aa0; }
+  .runner-name.neutral { background: #7a6a90; }
+  .runner-badge {
     width: 32px;
     height: 32px;
     border-radius: 50%;
@@ -168,14 +179,20 @@
     justify-content: center;
     font-size: 18px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    /* scaleX(-1) baked into every frame, not just applied once statically
+       — a keyframe animation's own `transform` replaces any transform set
+       outside it, so the flip has to live in the keyframes themselves.
+       The runner emoji (running figure) faces left by default on both
+       Windows' and Apple's emoji sets; run-across above moves left-to-
+       right, so without this the runner visibly moves backwards. */
     animation: run-bounce 0.26s ease-in-out infinite alternate;
   }
-  #runner-badge.boy { background: #2f6fed; }
-  #runner-badge.girl { background: #e05aa0; }
-  #runner-badge.neutral { background: #7a6a90; }
+  .runner-badge.boy { background: #2f6fed; }
+  .runner-badge.girl { background: #e05aa0; }
+  .runner-badge.neutral { background: #7a6a90; }
   @keyframes run-bounce {
-    from { transform: translateY(0); }
-    to   { transform: translateY(-4px); }
+    from { transform: scaleX(-1) translateY(0); }
+    to   { transform: scaleX(-1) translateY(-4px); }
   }
 
   #body {
@@ -240,12 +257,7 @@
     <div id="stage" class="hidden">
       <div id="rocket">🚀</div>
       <div id="sparks"></div>
-      <div id="runner-track">
-        <div id="runner">
-          <div id="runner-name" class="neutral"></div>
-          <div id="runner-badge" class="neutral">🏃</div>
-        </div>
-      </div>
+      <div id="runner-track"></div>
     </div>
 
     <div id="body"></div>
@@ -259,9 +271,7 @@
   const stageEl = document.getElementById('stage');
   const rocketEl = document.getElementById('rocket');
   const sparksEl = document.getElementById('sparks');
-  const runnerEl = document.getElementById('runner');
-  const runnerNameEl = document.getElementById('runner-name');
-  const runnerBadgeEl = document.getElementById('runner-badge');
+  const runnerTrackEl = document.getElementById('runner-track');
 
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
@@ -281,8 +291,16 @@
   const SPARK_COUNT = 12;
 
   let runnerQueue = [];
-  let runnerIdx = 0;
-  let runnerTimer = null;
+  let runnerLoopTimer = null;
+
+  // One #stage height for a single person, growing for each extra one so
+  // they get their own lane — capped so a big team on leave the same day
+  // still fits a small banner instead of it growing without bound.
+  const STAGE_BASE_HEIGHT = 88;
+  const RUNNER_LANE_HEIGHT = 32;
+  const STAGE_MAX_EXTRA_LANES = 3;
+  const RUNNER_CROSS_MS = 3200; // matches run-across's own duration
+  const RUNNER_LOOP_GAP_MS = 700; // pause between crossings before looping
 
   function launchRocket() {
     sparksEl.innerHTML = '';
@@ -305,36 +323,54 @@
     }, 740); // lines up with the rocket reaching the top of rocket-launch above
   }
 
-  function runNextPerson() {
-    if (!runnerQueue.length) return;
-    const person = runnerQueue[runnerIdx % runnerQueue.length];
-    runnerIdx++;
+  function buildRunnerLane(person, laneIndex) {
     const kind = person.character === 'boy' ? 'boy' : person.character === 'girl' ? 'girl' : 'neutral';
-    runnerNameEl.textContent = person.name || 'Out today';
-    runnerNameEl.className = kind;
-    runnerBadgeEl.className = kind;
-    runnerBadgeEl.textContent = kind === 'girl' ? '🏃‍♀️' : '🏃';
-    runnerEl.classList.remove('running');
-    void runnerEl.offsetWidth;
-    runnerEl.classList.add('running');
-    runnerTimer = setTimeout(runNextPerson, 3700); // a beat after the 3.2s crossing finishes
+    const lane = document.createElement('div');
+    lane.className = 'runner-lane';
+    lane.style.bottom = (8 + laneIndex * RUNNER_LANE_HEIGHT) + 'px';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'runner-name ' + kind;
+    nameEl.textContent = person.name || 'Out today';
+    const badgeEl = document.createElement('div');
+    badgeEl.className = 'runner-badge ' + kind;
+    badgeEl.textContent = kind === 'girl' ? '🏃‍♀️' : '🏃';
+    lane.appendChild(nameEl);
+    lane.appendChild(badgeEl);
+    return lane;
+  }
+
+  // Everyone on leave today crosses together in one pass, rather than
+  // taking turns — the earlier one-at-a-time design read as a single
+  // runner stalling/disappearing before the next one started. Loops for
+  // as long as the banner stays open, same as before.
+  function runAllTogether() {
+    runnerTrackEl.innerHTML = '';
+    runnerQueue.forEach((person, i) => {
+      const lane = buildRunnerLane(person, i);
+      runnerTrackEl.appendChild(lane);
+      void lane.offsetWidth; // force layout so each fresh lane's animation actually starts
+      lane.classList.add('running');
+    });
+    runnerLoopTimer = setTimeout(runAllTogether, RUNNER_CROSS_MS + RUNNER_LOOP_GAP_MS);
   }
 
   function startStage(leaves) {
-    clearTimeout(runnerTimer);
+    clearTimeout(runnerLoopTimer);
     runnerQueue = leaves;
-    runnerIdx = 0;
     stageEl.classList.remove('hidden');
+    const extraLanes = Math.min(Math.max(leaves.length - 1, 0), STAGE_MAX_EXTRA_LANES);
+    stageEl.style.height = (STAGE_BASE_HEIGHT + extraLanes * RUNNER_LANE_HEIGHT) + 'px';
     launchRocket();
-    runNextPerson();
+    runAllTogether();
   }
 
   function stopStage() {
-    clearTimeout(runnerTimer);
-    runnerTimer = null;
+    clearTimeout(runnerLoopTimer);
+    runnerLoopTimer = null;
     runnerQueue = [];
     stageEl.classList.add('hidden');
-    runnerEl.classList.remove('running');
+    stageEl.style.height = '';
+    runnerTrackEl.innerHTML = '';
   }
 
   function render(highlights) {

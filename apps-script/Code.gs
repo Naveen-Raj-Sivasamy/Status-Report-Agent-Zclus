@@ -146,9 +146,18 @@ var REPORT_DATE_COLUMN = 'Date';
 // ensureConfigTab().
 
 // How long tabs/columns responses are cached (seconds). Higher = faster
-// widget, but slower to notice a newly added tab/column. Run clearCache()
-// after such a change if you don't want to wait this out.
-var CACHE_SECONDS = 300;
+// widget, but slower to notice a change made straight on the Sheet
+// (adding/renaming a tab, editing Categories/Field Types/Options by
+// hand) — an edit made THROUGH the app instead already clears the
+// relevant key immediately (see every saveX action's cache.remove
+// call), so this delay only ever affects direct Sheet edits. Was 300
+// (5 min): fine for a solo admin who remembers to hit "Clear Cache",
+// but every other teammate has no such button-shaped signal that
+// anything changed, so a direct edit could sit unnoticed for up to 5
+// minutes on every open. 60 keeps the same clear-and-it's-instant path
+// for app-driven changes while shrinking the "I edited the Sheet
+// directly, why hasn't anyone else's app noticed" window app-wide.
+var CACHE_SECONDS = 60;
 
 // How long (ms) a save waits for the write lock before giving up and
 // telling the widget to retry, instead of queuing silently. Kept well
@@ -2702,6 +2711,20 @@ function renameTabReferences_(oldName, newName) {
     if (idx === -1) return;
     list[idx] = newName;
     setConfigValue(key, list.join(', '));
+  });
+
+  // Today's Highlights (see getTodayHighlights()) points at its source
+  // tabs by a single-value _Config pointer (HolidaysTab/PlannedLeaveTab),
+  // not a per-row Tab column, so the generic column-scan/list rewrites
+  // above never touch it. Without this, renaming the tab these already
+  // point at silently breaks the holiday/leave banner and Teams post —
+  // the exact "PlannedLeaveTab still says the old name" trap. Only ever
+  // updates a pointer that's currently set to oldName — never sets one
+  // that was blank (an org that never configured this shouldn't have a
+  // rename accidentally opt them in), and never touches a pointer
+  // deliberately set to some OTHER tab.
+  ['HolidaysTab', 'PlannedLeaveTab'].forEach(function (key) {
+    if (getConfigValue(key) === oldName) setConfigValue(key, newName);
   });
 }
 

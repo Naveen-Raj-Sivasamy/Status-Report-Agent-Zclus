@@ -1446,6 +1446,17 @@ function startMainApp() {
   popup = createPopup();
   floatBtn = createFloatButton();
 
+  // Keeps tabs/options/fieldSchema/categories warm in the background so
+  // the FIRST time anyone opens a screen after a direct Sheet edit, it's
+  // already showing current data — not stale-then-quietly-updating (the
+  // getters' own stale-while-revalidate only starts refreshing once
+  // something is actually opened, so on a long-running tray app that
+  // could otherwise sit stale for hours). Paired with CACHE_SECONDS
+  // dropping to 60 server-side (see Code.gs) — 2 minutes here comfortably
+  // clears that window each tick instead of sometimes re-fetching a
+  // still-cached response.
+  setInterval(prefetchAll, 2 * 60 * 1000);
+
   checkTodayHighlights(); // once at launch...
   // ...and every 5 minutes after, so a leave entered any time during the
   // day — from this app's own form or straight on the Sheet — shows up

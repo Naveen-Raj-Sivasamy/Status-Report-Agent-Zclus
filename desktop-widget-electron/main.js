@@ -540,6 +540,21 @@ ipcMain.handle('save-report-settings', async (_e, settings) => {
   tabsCache = null; // HiddenTabs can change which tabs the widget shows
   return result;
 });
+// One-click version of running cleanupWeeklyConnectAndLeaveTabs() from the
+// Apps Script editor's Run menu (see Code.gs) — sets both disable flags,
+// deletes the Weekly_Connect/Leave tabs if present, and scrubs every
+// stored reference to them, all server-side in one call. Wipes every
+// in-memory cache this process keeps, same as clear-cache above, since
+// this can change tabs/categories/fieldSchema/options all at once.
+ipcMain.handle('cleanup-weekly-connect-and-leave-tabs', async () => {
+  const result = await apiPostBody({ action: 'cleanupWeeklyConnectAndLeaveTabs' });
+  tabsCache = null;
+  columnsCache = {};
+  optionsCache = null;
+  fieldSchemaCache = null;
+  categoriesCache = null;
+  return result;
+});
 // Renames a real sheet tab and rewrites every reference to its old name
 // server-side (see renameTab/renameTabReferences_ in Code.gs) — a rename
 // can touch the tab list, categories, columns, field types and options

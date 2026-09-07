@@ -267,11 +267,25 @@
       </label>
       <p class="hint" style="margin: 4px 0 0;">Stops the Weekly_Connect tab (and its landing-screen category) from auto-recreating itself. Turn this on FIRST, save, THEN delete the tab and its rows on Categories — deleting it before this is on just gets it recreated on the next tab-list refresh.</p>
 
+      <label style="display:flex; align-items:center; gap:6px; font-size:12px; margin-top:10px; cursor:pointer;">
+        <input type="checkbox" id="disable-leave-check" />
+        Disable Leave
+      </label>
+      <p class="hint" style="margin: 4px 0 0;">Same idea, for the Leave tab (and its landing-screen category).</p>
+
       <div class="row-actions">
         <button id="save-report-settings-btn">Save App Settings</button>
       </div>
       <div class="err" id="report-settings-err"></div>
       <div class="ok" id="report-settings-ok"></div>
+
+      <div style="margin-top:20px; padding-top:16px; border-top:1px solid #eee;">
+        <div class="field-label">Remove Weekly_Connect / Leave for good</div>
+        <p class="hint" style="margin: -2px 0 6px;">One click, server-side: turns both "Disable" checkboxes above on, deletes the Weekly_Connect and Leave tabs if they still exist, and scrubs every stored reference to them (Categories, Field Types, Report Configs, Options, Report/Hidden tab lists) — atomically, regardless of whatever else is unsaved on this screen or left open in another window. This is what used to require running a function from the Apps Script editor.</p>
+        <button class="secondary" id="cleanup-weekly-leave-btn">Remove Weekly_Connect / Leave tabs now</button>
+        <div class="err" id="cleanup-weekly-leave-err"></div>
+        <div class="ok" id="cleanup-weekly-leave-ok"></div>
+      </div>
     </div>
 
     <div class="section">
@@ -330,7 +344,7 @@
   let fieldSchemaMap = {};
   let categoriesMap = {};
   let allTabs = []; // every real tab, including currently-hidden ones — Report Settings/Report Configs both need this
-  let reportSettings = { hiddenTabs: [], reminderRecipients: [], teamsWebhookUrl: '', adminContactEmails: [], disableWeeklyConnect: false };
+  let reportSettings = { hiddenTabs: [], reminderRecipients: [], teamsWebhookUrl: '', adminContactEmails: [], disableWeeklyConnect: false, disableLeaveTab: false };
   // [{name, tabs: [{tab, fields: [...]}], recipients: [...], scheduleDay, scheduleHour, enabled}, ...]
   let reportConfigs = [];
   let connectGroups = []; // [{name, webhookUrl}, ...]
@@ -990,6 +1004,7 @@
     (reportSettings.adminContactEmails || []).forEach((e) => adminContactContainer.appendChild(buildEmailRow(e)));
 
     document.getElementById('disable-weekly-connect-check').checked = !!reportSettings.disableWeeklyConnect;
+    document.getElementById('disable-leave-check').checked = !!reportSettings.disableLeaveTab;
 
     renderRenameTabSelect();
   }
@@ -1009,6 +1024,7 @@
       teamsWebhookUrl: document.getElementById('teams-webhook-url').value.trim(),
       adminContactEmails: Array.from(document.querySelectorAll('#admin-contact-emails-rows input')).map((i) => i.value.trim()).filter(Boolean),
       disableWeeklyConnect: document.getElementById('disable-weekly-connect-check').checked,
+      disableLeaveTab: document.getElementById('disable-leave-check').checked,
     };
     await saveSection('save-report-settings-btn', 'report-settings-err', 'report-settings-ok', () => window.statusApp.saveReportSettings(settings));
     reportSettings = Object.assign({}, reportSettings, settings);
@@ -1017,6 +1033,27 @@
     // hidden (or un-hidden) here is reflected the next time any of them
     // adds a new row, without needing a full reload.
     liveTabs = allTabs.filter((t) => !settings.hiddenTabs.includes(t));
+  });
+
+  // One-click server-side cleanup — see the hint text next to this button
+  // and the comment on Code.gs's 'cleanupWeeklyConnectAndLeaveTabs' doPost
+  // action for why this is deliberately its own call instead of being
+  // folded into Save App Settings above. Destructive (deletes sheet tabs),
+  // so confirm first — this is a native Electron renderer, not a web page,
+  // so window.confirm is fine here.
+  document.getElementById('cleanup-weekly-leave-btn').addEventListener('click', async () => {
+    const sure = window.confirm(
+      'This deletes the Weekly_Connect and Leave tabs (if they still exist) and scrubs every stored reference to them. This cannot be undone. Continue?'
+    );
+    if (!sure) return;
+    const ok = await saveSection('cleanup-weekly-leave-btn', 'cleanup-weekly-leave-err', 'cleanup-weekly-leave-ok', () => window.statusApp.cleanupWeeklyConnectAndLeaveTabs());
+    if (ok) {
+      // Tabs, categories, field schema, and both disable checkboxes all
+      // just changed server-side — a full reload is simpler and safer
+      // than trying to patch every affected section's in-memory state by
+      // hand here.
+      await loadAndShowContent();
+    }
   });
 
   // -------------------- Rename a Tab --------------------

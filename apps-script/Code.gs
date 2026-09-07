@@ -423,6 +423,8 @@ function doPost(e) {
           // See ensureWeeklyConnectTab's own comment — this is the actual
           // way to make a deleted Weekly_Connect tab/category stay deleted.
           disableWeeklyConnect: getConfigValue('DisableWeeklyConnect') === 'TRUE',
+          // See ensureLeaveTab's own comment — same mechanism, for Leave.
+          disableLeaveTab: getConfigValue('DisableLeaveTab') === 'TRUE',
         },
       });
     }
@@ -446,11 +448,38 @@ function doPost(e) {
         setConfigValue('TeamsWebhookUrl', (settings.teamsWebhookUrl || '').trim());
         setConfigValue('AdminContactEmails', (settings.adminContactEmails || []).join(', '));
         setConfigValue('DisableWeeklyConnect', settings.disableWeeklyConnect ? 'TRUE' : 'FALSE');
+        setConfigValue('DisableLeaveTab', settings.disableLeaveTab ? 'TRUE' : 'FALSE');
       } finally {
         reportLock.releaseLock();
       }
       CacheService.getScriptCache().remove('tabs');
       return jsonOut({ ok: true, message: 'Report settings saved.' });
+    }
+
+    /** One-click version of cleanupWeeklyConnectAndLeaveTabs() (see its own
+     * comment above renameInColumn_) — sets both disable flags, deletes
+     * both tabs if present, and scrubs every stored reference to them, all
+     * server-side in one call. Exists so this is a button in the app
+     * (Manage -> App Settings) instead of something that only runs from
+     * the Apps Script editor's Run menu — the whole point being that
+     * re-applying this fix never again depends on finding this file and
+     * picking a function from a dropdown. Deliberately its own action, not
+     * folded into saveReportSettings above: it doesn't depend on (or
+     * touch) anything else in that form, so a stale copy of the rest of
+     * App Settings sitting open in another window can't undo it, and it
+     * can't be undone by a stale save of that form either. */
+    if (body.action === 'cleanupWeeklyConnectAndLeaveTabs') {
+      var cleanupLock = LockService.getScriptLock();
+      if (!cleanupLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        cleanupWeeklyConnectAndLeaveTabs();
+      } finally {
+        cleanupLock.releaseLock();
+      }
+      clearCache();
+      return jsonOut({ ok: true, message: 'Weekly_Connect and Leave tabs removed, references cleaned.' });
     }
 
     /** Renames a real sheet tab AND every reference to its old name across

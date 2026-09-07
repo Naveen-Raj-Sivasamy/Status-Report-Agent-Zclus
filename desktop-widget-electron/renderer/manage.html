@@ -110,6 +110,8 @@
   .cat-tab-empty { font-size: 11.5px; color: #e8c9cf; font-style: italic; }
   .cat-tab-adder { display: flex; gap: 8px; margin-top: 8px; }
   .cat-tab-adder select { flex: 1; }
+  .fs-tab-adder { display: flex; gap: 8px; flex: 1 1 260px; flex-wrap: wrap; align-items: center; }
+  .fs-tab-adder select { flex: 1; min-width: 140px; }
   .compare-table { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
   .compare-row {
     display: grid; grid-template-columns: 1fr 92px 92px; align-items: center;
@@ -216,10 +218,10 @@
 
     <div class="section">
       <h3>Field Types</h3>
-      <p class="hint">Which fields get a dropdown/date/checkbox/etc. A field left off here is just plain text — that's fine, most fields don't need anything special. Column shows every real column on that tab — or just type a name that isn't listed yet and it's created on the sheet when you save, no need to add it there first.</p>
+      <p class="hint">Add a tab below and every real column on it shows up automatically — just pick a Type for the ones that need one; a column left at "(plain text)" needs nothing further. Need a column that isn't on the sheet yet? Add it inside that tab's section — it's created there when you save.</p>
       <div id="fs-rows"></div>
       <div class="row-actions">
-        <button class="secondary" id="add-fs-row-btn">+ Add field</button>
+        <div id="fs-tab-adder" class="fs-tab-adder"></div>
         <button id="save-fs-btn">Save Field Types</button>
       </div>
       <div class="err" id="fs-err"></div>
@@ -552,39 +554,138 @@
 
   // -------------------- Field Types --------------------
 
-  // Fields grouped under a small heading per tab (not one long undifferentiated
-  // list) — this used to render every field across every tab as identical
-  // flat rows with no visual separation, which was the main source of
-  // confusion: no way to tell at a glance which tab a given row belonged to.
+  // Grouped by TAB, same add-a-tab / remove-a-tab shape as Landing-Screen
+  // Categories above — pick a tab from the dropdown and every REAL column
+  // already on that sheet tab shows up automatically (fetched via
+  // getColumns), each with just a Type to pick. No more hunting for a
+  // tab's exact column spelling by hand. fsTabSections (which tabs are
+  // currently shown as a card) is deliberately its own state, not derived
+  // from fieldSchemaMap every render — otherwise a tab whose every column
+  // gets set back to "(plain text)" would vanish out from under whoever's
+  // still editing it, instead of just sitting there configured-but-plain
+  // until they remove it on purpose.
+  let fsTabSections = [];
+
   function renderFieldSchema() {
     const container = document.getElementById('fs-rows');
     container.innerHTML = '';
-    Object.keys(fieldSchemaMap).forEach((tab) => {
-      const cols = fieldSchemaMap[tab] || {};
-      const colNames = Object.keys(cols);
-      if (!colNames.length) return;
-      const heading = document.createElement('div');
-      heading.className = 'field-label';
-      heading.style.cssText = 'margin-top:10px; font-size:11px;';
-      heading.textContent = tab;
-      container.appendChild(heading);
-      colNames.forEach((col) => container.appendChild(buildFsRow(tab, col, cols[col])));
-    });
+    if (!fsTabSections.length) fsTabSections = Object.keys(fieldSchemaMap);
+    fsTabSections.forEach((tab) => container.appendChild(buildFsTabGroup(tab)));
+    renderFsAdder();
   }
 
-  // One card per field — a Tab/Column/Type header row, plus a second row
-  // that only appears when it's actually relevant to the chosen Type
-  // (Options list for select/multiselect, Based-on for week-auto) instead
-  // of always showing both regardless, which is what made this confusing:
-  // two inputs visible on every single field, useless for the vast
-  // majority of them. Column is a real dropdown of that tab's actual sheet
-  // columns (fetched via getColumns) instead of a free-text field a typo
-  // could silently break.
-  function buildFsRow(tab, column, spec) {
+  function renderFsAdder() {
+    const adder = document.getElementById('fs-tab-adder');
+    adder.innerHTML = '';
+    const select = document.createElement('select');
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'secondary';
+    addBtn.textContent = '+ Add tab';
+
+    const available = liveTabs.filter((t) => fsTabSections.indexOf(t) === -1);
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = available.length ? 'Choose a tab to configure…' : 'Every tab already has a section';
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    select.appendChild(placeholder);
+    available.forEach((t) => select.appendChild(new Option(t, t)));
+    select.disabled = !available.length;
+    addBtn.disabled = !available.length;
+
+    addBtn.addEventListener('click', () => {
+      if (!select.value) return;
+      fsTabSections.push(select.value);
+      renderFieldSchema();
+    });
+
+    adder.appendChild(select);
+    adder.appendChild(addBtn);
+  }
+
+  // One card per tab. Real columns load asynchronously (getColumns hits
+  // the backend) so the card appears immediately with a loading state,
+  // then fills in — same tolerance for a beat of latency as the rest of
+  // this screen already has elsewhere (e.g. the old per-row column
+  // datalist did the same fetch-then-populate).
+  function buildFsTabGroup(tab) {
+    const group = document.createElement('div');
+    group.className = 'group fs-tab-group';
+    group.dataset.tab = tab;
+
+    const header = document.createElement('div');
+    header.className = 'group-header';
+    const heading = document.createElement('div');
+    heading.className = 'field-label';
+    heading.style.cssText = 'flex:1; font-size:12px;';
+    heading.textContent = tab;
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn';
+    del.textContent = '✕ Remove tab';
+    del.title = 'Remove every field type set for ' + tab;
+    del.onclick = () => {
+      fsTabSections = fsTabSections.filter((t) => t !== tab);
+      renderFieldSchema();
+    };
+    header.appendChild(heading);
+    header.appendChild(del);
+    group.appendChild(header);
+
+    const colsWrap = document.createElement('div');
+    colsWrap.className = 'fs-cols';
+    colsWrap.innerHTML = '<p class="hint" style="margin:4px 0;">Loading columns…</p>';
+    group.appendChild(colsWrap);
+
+    const extraWrap = document.createElement('div');
+    group.appendChild(extraWrap);
+
+    const addColBtn = document.createElement('button');
+    addColBtn.type = 'button';
+    addColBtn.className = 'icon-btn';
+    addColBtn.textContent = '+ Add another column';
+    addColBtn.title = "Define a field type for a column that isn't on the sheet yet — it's created there when you save";
+    addColBtn.onclick = () => extraWrap.appendChild(buildFsColumnRow(tab, '', {}, true, false));
+    group.appendChild(addColBtn);
+
+    const savedForTab = fieldSchemaMap[tab] || {};
+    window.statusApp.getColumns(tab).then((res) => {
+      const realCols = (res && res.columns) || [];
+      colsWrap.innerHTML = '';
+      realCols.forEach((col) => {
+        colsWrap.appendChild(buildFsColumnRow(tab, col, savedForTab[col] || {}, false, false));
+      });
+      // A saved spec for a column that's no longer actually on the sheet
+      // (renamed/removed directly in Sheets) shows here too, clearly
+      // marked, instead of quietly disappearing — same "don't silently
+      // drop it" reasoning as the orphaned-tab fix above, one level down
+      // at the column level.
+      Object.keys(savedForTab).forEach((col) => {
+        if (realCols.indexOf(col) === -1) {
+          colsWrap.appendChild(buildFsColumnRow(tab, col, savedForTab[col], true, true));
+        }
+      });
+      if (!realCols.length && !Object.keys(savedForTab).length) {
+        colsWrap.innerHTML = '<p class="hint" style="margin:4px 0;">This tab has no columns yet.</p>';
+      }
+    }).catch(() => {
+      colsWrap.innerHTML = '<p class="hint" style="margin:4px 0;">Couldn’t load this tab’s columns — try again from Refresh.</p>';
+    });
+
+    return group;
+  }
+
+  // removable: shows a ✕ to drop the row entirely (a speculative
+  // not-yet-real column, or a saved column that's gone missing from the
+  // sheet). missing: labels it as no-longer-on-the-sheet instead of
+  // offering a text input for it (renaming it back into existence isn't
+  // what that ✕ is for — removing the stale entry is).
+  function buildFsColumnRow(tab, column, spec, removable, missing) {
     spec = spec || {};
     const row = document.createElement('div');
     row.className = 'fs-row group';
-    row.style.display = 'block'; // override .fs-row's own display:flex — this card lays itself out internally instead
+    row.style.display = 'block';
 
     const header = document.createElement('div');
     header.className = 'group-header';
@@ -602,56 +703,20 @@
       return wrap;
     }
 
-    const tabSel = document.createElement('select');
-    tabSel.className = 'fs-tab';
-    const blankTabOpt = document.createElement('option');
-    blankTabOpt.value = '';
-    blankTabOpt.textContent = '— tab —';
-    tabSel.appendChild(blankTabOpt);
-    liveTabs.forEach((t) => {
-      const o = document.createElement('option');
-      o.value = t;
-      o.textContent = t;
-      tabSel.appendChild(o);
-    });
-    tabSel.value = tab || '';
-
-    // A combo, not a strict dropdown: pick a real existing column from the
-    // suggestions, or just type a name that isn't there yet — saving with
-    // a new name creates that column on the actual sheet (see
-    // ensureColumnExists_ in Code.gs). Used to be a <select> restricted to
-    // columns that already existed, which meant "define a field's type
-    // from the app" could never actually CREATE the field — only the
-    // Sheet side could, contradicting what the comparison table above
-    // already claims is possible from either side.
-    const colListId = 'fs-col-list-' + Math.random().toString(36).slice(2);
-    const colSel = document.createElement('input');
-    colSel.type = 'text';
-    colSel.className = 'fs-col';
-    colSel.setAttribute('list', colListId);
-    colSel.placeholder = 'Pick an existing column, or type a new one';
-    colSel.value = column || '';
-    const colDatalist = document.createElement('datalist');
-    colDatalist.id = colListId;
-
-    async function populateColumns(selectedTab) {
-      colDatalist.innerHTML = '';
-      if (!selectedTab) return;
-      let cols = [];
-      try {
-        const res = await window.statusApp.getColumns(selectedTab);
-        cols = (res && res.columns) || [];
-      } catch {
-        cols = [];
-      }
-      cols.forEach((c) => {
-        const opt = document.createElement('option');
-        opt.value = c;
-        colDatalist.appendChild(opt);
-      });
+    let colEl;
+    if (removable && !missing) {
+      colEl = document.createElement('input');
+      colEl.type = 'text';
+      colEl.className = 'fs-col';
+      colEl.placeholder = 'New column name';
+      colEl.value = column || '';
+    } else {
+      colEl = document.createElement('div');
+      colEl.className = 'fs-col';
+      colEl.dataset.value = column;
+      colEl.style.cssText = 'padding:8px 10px; font-size:12.5px; color:#fff; font-weight:600;';
+      colEl.textContent = column + (missing ? ' (not on the sheet)' : '');
     }
-    populateColumns(tab);
-    tabSel.onchange = () => { colSel.value = ''; populateColumns(tabSel.value); };
 
     const typeSel = document.createElement('select');
     typeSel.className = 'fs-type';
@@ -663,18 +728,17 @@
     });
     typeSel.value = spec.type || '';
 
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'icon-btn';
-    del.textContent = '✕';
-    del.title = 'Remove this field';
-    del.onclick = () => row.remove();
-
-    header.appendChild(labeled('Tab', tabSel));
-    header.appendChild(labeled('Column', colSel));
-    header.appendChild(colDatalist); // not visible itself — colSel's list="" attribute points at it
+    header.appendChild(labeled('Column', colEl));
     header.appendChild(labeled('Type', typeSel));
-    header.appendChild(del);
+    if (removable) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'icon-btn';
+      del.textContent = '✕';
+      del.title = 'Remove this column';
+      del.onclick = () => row.remove();
+      header.appendChild(del);
+    }
     row.appendChild(header);
 
     const optKeyInput = document.createElement('input');
@@ -708,31 +772,32 @@
     return row;
   }
 
-  document.getElementById('add-fs-row-btn').addEventListener('click', () => {
-    document.getElementById('fs-rows').appendChild(buildFsRow('', '', {}));
-  });
-
   document.getElementById('save-fs-btn').addEventListener('click', async () => {
-    const rows = Array.from(document.querySelectorAll('#fs-rows .fs-row'));
+    const groups = Array.from(document.querySelectorAll('#fs-rows .fs-tab-group'));
     const map = {};
-    // A duplicate (same Tab+Column on two rows) used to save silently —
-    // whichever row happened to build into `map` last just overwrote the
-    // other with no warning, so the first row's edits could vanish
-    // without anyone noticing. Catch that here instead, before it saves.
+    // A duplicate (same Tab+Column twice) used to save silently — whichever
+    // row happened to build into `map` last just overwrote the other with
+    // no warning. Catch that here instead, before it saves. Can still
+    // happen now if a manually-added "new column" name collides with a
+    // real column already listed above it.
     const seen = new Set();
     let duplicate = null;
-    rows.forEach((r) => {
-      const tab = r.querySelector('.fs-tab').value.trim();
-      const column = r.querySelector('.fs-col').value.trim();
-      const type = r.querySelector('.fs-type').value.trim();
-      if (!tab || !column || !type) return;
-      const key = tab + '' + column.toLowerCase();
-      if (seen.has(key)) duplicate = `${column}" on "${tab}`;
-      seen.add(key);
-      const optionsKey = r.querySelector('.fs-optkey').value.trim();
-      const basedOn = r.querySelector('.fs-basedon').value.trim();
-      if (!map[tab]) map[tab] = {};
-      map[tab][column] = { type, optionsKey, basedOn };
+    groups.forEach((g) => {
+      const tab = g.dataset.tab;
+      const rows = Array.from(g.querySelectorAll('.fs-row'));
+      rows.forEach((r) => {
+        const colEl = r.querySelector('.fs-col');
+        const column = (colEl.tagName === 'INPUT' ? colEl.value : colEl.dataset.value || '').trim();
+        const type = r.querySelector('.fs-type').value.trim();
+        if (!column || !type) return; // blank Type = plain text, not stored; blank Column = an empty "+ Add another column" row, skip it
+        const key = tab + '::' + column.toLowerCase();
+        if (seen.has(key)) duplicate = `${column}" on "${tab}`;
+        seen.add(key);
+        const optionsKey = r.querySelector('.fs-optkey').value.trim();
+        const basedOn = r.querySelector('.fs-basedon').value.trim();
+        if (!map[tab]) map[tab] = {};
+        map[tab][column] = { type, optionsKey, basedOn };
+      });
     });
     if (duplicate) {
       document.getElementById('fs-err').textContent = `"${duplicate}" is listed more than once — remove one before saving, or only the last one will actually be kept.`;
@@ -740,11 +805,6 @@
     }
     const saved = await saveSection('save-fs-btn', 'fs-err', 'fs-ok', () => window.statusApp.saveFieldSchema(map));
     fieldSchemaMap = map;
-    // Re-group by tab now that the save actually went through — a field
-    // just added (always appended at the bottom, tab not chosen yet)
-    // moves to sit with the rest of its real tab's fields immediately,
-    // instead of only showing correctly grouped the next time this
-    // screen is opened fresh.
     if (saved) renderFieldSchema();
   });
 
@@ -1052,6 +1112,13 @@
     tabSel.style.flex = '1';
     tabSel.appendChild(new Option('— tab —', ''));
     allTabs.forEach((t) => tabSel.appendChild(new Option(t, t)));
+    // Same reasoning as Field Types' tabSel above — keep a deleted tab's
+    // stored value selectable rather than letting it silently fall back to
+    // blank (Save Report Configs drops any tab row with no tab selected,
+    // same as Field Types does).
+    if (tab && allTabs.indexOf(tab) === -1) {
+      tabSel.appendChild(new Option(tab + ' (tab no longer exists)', tab));
+    }
     tabSel.value = tab || '';
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';

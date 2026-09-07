@@ -2696,6 +2696,86 @@ function renameInColumn_(sheetName, col, oldValue, newValue) {
   if (changed) range.setValues(values);
 }
 
+/** One-time cleanup for the Weekly_Connect and Leave tabs specifically —
+ * run this ONCE from the Apps Script editor (pick
+ * cleanupWeeklyConnectAndLeaveTabs from the function dropdown at the top,
+ * then Run) after the DisableWeeklyConnect/DisableLeaveTab guards above
+ * ensureWeeklyConnectTab()/ensureLeaveTab() have deployed. In order:
+ *   1. Sets both disable flags to TRUE in _Config (idempotent — safe even
+ *      if you already set one or both by hand).
+ *   2. Deletes the Weekly_Connect and Leave sheet tabs, if present.
+ *   3. Strips every stored reference to those two tab names out of
+ *      _Categories, _FieldSchema, _ReportConfigs, and _Config's
+ *      ReportTabs/HiddenTabs lists — the same handful of places
+ *      renameTabReferences_ above rewrites on a rename, just removed here
+ *      instead of renamed.
+ *   4. Drops the _Options entries seedWeeklyConnectConfig_ created
+ *      specifically for Weekly_Connect's own fields (.Type/.Priority/
+ *      .Status) — nothing reads them once _FieldSchema no longer has a
+ *      Weekly_Connect row.
+ * Steps 1-2 have to happen in that order (flag first, then delete) or the
+ * deletion in step 2 doesn't stick — the exact trap ensureWeeklyConnectTab()/
+ * ensureLeaveTab()'s own comments already document; this function just does
+ * both steps together so it isn't left to timing. Safe to re-run — every
+ * step is a no-op once there's nothing left for it to do. Deliberately
+ * leaves _ConnectGroups and the ConnectGroups option list alone: those back
+ * the Group field's option list in general, not something specific to
+ * Weekly_Connect, so removing Weekly_Connect itself doesn't make them
+ * unwanted. */
+function cleanupWeeklyConnectAndLeaveTabs() {
+  var tabsToRemove = [WEEKLY_CONNECT_TAB_NAME, LEAVE_TAB_NAME];
+
+  setConfigValue('DisableWeeklyConnect', 'TRUE');
+  setConfigValue('DisableLeaveTab', 'TRUE');
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  tabsToRemove.forEach(function (tabName) {
+    var sheet = ss.getSheetByName(tabName);
+    if (sheet) ss.deleteSheet(sheet);
+  });
+
+  removeTabReferences_(tabsToRemove);
+
+  var optMap = getOptionsMap();
+  ['Type', 'Priority', 'Status'].forEach(function (suffix) {
+    delete optMap[WEEKLY_CONNECT_TAB_NAME + '.' + suffix];
+  });
+  writeOptionsMap(optMap);
+
+  Logger.log('cleanupWeeklyConnectAndLeaveTabs done — Weekly_Connect and Leave tabs removed, references cleaned.');
+}
+
+/** Removes every stored reference to any tab name in `tabNames` — the
+ * deletion counterpart to renameTabReferences_ above (same handful of
+ * places, dropped here instead of renamed): _Categories/_FieldSchema/
+ * _ReportConfigs rows, and _Config's ReportTabs/HiddenTabs lists. A no-op
+ * for a name that isn't referenced anywhere, so this is safe to call with
+ * names that were only ever partially set up. */
+function removeTabReferences_(tabNames) {
+  var names = tabNames.map(function (n) { return String(n).trim(); });
+
+  var catMap = getCategoriesMap();
+  Object.keys(catMap).forEach(function (cat) {
+    catMap[cat] = catMap[cat].filter(function (t) { return names.indexOf(t) === -1; });
+  });
+  writeCategoriesMap(catMap);
+
+  var fsMap = getFieldSchemaMap();
+  names.forEach(function (n) { delete fsMap[n]; });
+  writeFieldSchemaMap(fsMap);
+
+  var configs = getReportConfigs();
+  configs.forEach(function (c) {
+    c.tabs = c.tabs.filter(function (t) { return names.indexOf(t.tab) === -1; });
+  });
+  writeReportConfigs(configs);
+
+  ['ReportTabs', 'HiddenTabs'].forEach(function (key) {
+    var list = getConfigList_(key).filter(function (t) { return names.indexOf(t) === -1; });
+    setConfigValue(key, list.join(', '));
+  });
+}
+
 function getSheetByName(name) {
   return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
 }

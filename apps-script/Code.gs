@@ -230,6 +230,16 @@ function doGet(e) {
     if (action === 'weeklyConnectTickets') {
       return jsonOut({ ok: true, tickets: getWeeklyConnectTickets() });
     }
+    /** Powers the desktop widget's "what's today" banner — see
+     * getTodayHighlights()'s own comment for what it reads and why
+     * nothing here is hardcoded to any one client's tab names. Same
+     * doGet-with-no-token-check trust level as weeklyConnectTickets
+     * above — this can return real people's names (who's on planned
+     * leave today), same as that action already does for ticket
+     * content. */
+    if (action === 'todayHighlights') {
+      return jsonOut({ ok: true, highlights: getTodayHighlights() });
+    }
     // Deliberately NOT a doGet action like tabs/options/fieldSchema/
     // categories above, even though it's a read — those return tab
     // structure or (at most) first names; this one returns real email
@@ -601,6 +611,13 @@ function doPost(e) {
       }
       var postResult = postWeeklyConnectToTeams(body.group || '', postRange);
       return jsonOut({ ok: postResult.ok, message: postResult.message, error: postResult.ok ? undefined : postResult.message });
+    }
+
+    /** Manual "Post to Teams now" button for Today's Highlights — same
+     * shape as postWeeklyConnectToTeamsNow above. */
+    if (body.action === 'postTodayHighlightsNow') {
+      var highlightsResult = postTodayHighlightsToTeams();
+      return jsonOut({ ok: highlightsResult.ok, message: highlightsResult.message, error: highlightsResult.ok ? undefined : highlightsResult.message });
     }
 
     /** Read/write for _ConnectGroups — a webhook URL is a write capability,
@@ -2804,6 +2821,38 @@ function ensureConfigDefaults_(sheet) {
     // own comment for what flipping this to 'TRUE' actually does (stops
     // it self-healing back after you delete it).
     ['DisableWeeklyConnect', 'FALSE'],
+    // ---- Today's Highlights (holiday/leave/message banner + Teams post) ----
+    // Every value below is a pointer, never client data itself — the
+    // actual holiday names, who's on leave, and any custom message all
+    // live in the sheet tabs these point at, read fresh every time by
+    // getTodayHighlights(). HolidaysTab/PlannedLeaveTab only default to a
+    // name that already exists in THIS spreadsheet right now (same
+    // migratedTabList_ reasoning ReportTabs/HiddenTabs use above) — a
+    // brand-new org gets an honest blank, not a guess at someone else's
+    // tab name, and either can be repointed any time without touching
+    // code, same as every other _Config value.
+    ['HolidaysTab', existingTabNames.indexOf('US & IND Holidays') !== -1 ? 'US & IND Holidays' : ''],
+    ['PlannedLeaveTab', existingTabNames.indexOf('Planned Leave') !== -1 ? 'Planned Leave' : ''],
+    // Unlike the two above, this one's safe to default to a fixed name
+    // even for a brand-new org: _BannerMessages is entirely new (see
+    // ensureBannerMessagesTab()), so there's no pre-existing tab it could
+    // ever collide with or self-heal back over after a rename.
+    ['BannerMessagesTab', '_BannerMessages'],
+    // Heading text on the Teams post — see postTodayHighlightsToTeams().
+    ['TeamsBannerTitle', "Today's Update"],
+    // Hour (0-23, script timezone — see appsscript.json) the daily Teams
+    // post fires at. Changing this needs ensureTodayHighlightsTrigger_()
+    // re-run once (same one-time-setup pattern as setupTriggers()) for
+    // the actual trigger to move — this value alone doesn't reschedule
+    // anything on its own.
+    ['BannerPostHour', '9'],
+    // 'FALSE' by default, same "shipping this never changes anything on
+    // its own" reasoning as RequireLogin/DisableWeeklyConnect above.
+    // Turns off ONLY the Teams post — the desktop widget's banner (see
+    // doGet's todayHighlights action) keeps working either way, same
+    // "each surface can be turned off independently" split
+    // DisableWeeklyConnect draws between the tab and its Teams post.
+    ['DisableTodayHighlightsTeamsPost', 'FALSE'],
   ];
   var data = sheet.getDataRange().getValues();
   var existingKeys = data.slice(1).map(function (r) { return String(r[0]).trim(); });
@@ -2885,6 +2934,205 @@ function getReminderRecipients() {
 function getTeamsWebhookUrl() {
   var fromSheet = getConfigValue('TeamsWebhookUrl');
   return fromSheet || TEAMS_WEBHOOK_URL;
+}
+
+// ------------------------- Today's Highlights ----------------------------
+//
+// A holiday/planned-leave/custom-message banner the desktop widget shows
+// on its own (see doGet's todayHighlights action), plus the same content
+// posted to Teams once a day (see postTodayHighlightsToTeams() and
+// ensureTodayHighlightsTrigger_()). Deliberately reads three *pointers*
+// from _Config (HolidaysTab/PlannedLeaveTab/BannerMessagesTab) instead of
+// three hardcoded tab names — this app already learned that lesson the
+// hard way once (see ensureWeeklyConnectTab()'s comment on tabs that
+// self-heal back under their old name after a rename): a client renaming
+// whichever tab they use for holidays or planned leave just needs to
+// repoint the matching _Config value, never a code change.
+
+// Ad-hoc note for a specific day ("Office closing early Friday") that
+// doesn't need a holiday entry to justify it. Starts with "_" so it's
+// hidden from the widget's tab list like _Config/_Holidays. Brand new —
+// unlike Leave/Weekly_Connect, there's no pre-existing tab this could
+// ever collide with or self-heal back over after a rename; point
+// _Config's BannerMessagesTab elsewhere if you'd rather use a different
+// tab/name for this.
+var BANNER_MESSAGES_TAB_NAME = '_BannerMessages';
+
+function ensureBannerMessagesTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var name = getConfigValue('BannerMessagesTab') || BANNER_MESSAGES_TAB_NAME;
+  if (ss.getSheetByName(name)) return;
+  var sheet = ss.insertSheet(name);
+  sheet.getRange(1, 1, 1, 2).setValues([['Date', 'Message']]);
+  sheet.hideSheet();
+}
+
+/** One function powering both surfaces (the widget's banner AND the
+ * Teams post) so they can never drift out of sync with each other — fix
+ * the logic once, both update. Reads three things for "today" (script
+ * timezone, same normalizeDateForCompare() every other date-matching in
+ * this file already uses): a holiday from _Config's HolidaysTab, everyone
+ * on _Config's PlannedLeaveTab for today, and any custom note on
+ * _BannerMessages for today. Every column is read BY HEADER NAME
+ * (findColumnIndex), not fixed position, so reordering columns on any of
+ * these tabs doesn't break this. Any tab that's missing, or missing its
+ * Date column, is silently skipped — same "opt-in, never a hard
+ * requirement" rule HOLIDAYS_TAB_NAME/isHoliday() already follows — so
+ * this never errors just because an org hasn't set one of these up yet. */
+function getTodayHighlights() {
+  ensureBannerMessagesTab();
+  var tz = Session.getScriptTimeZone();
+  var today = normalizeDateForCompare(new Date(), tz);
+
+  var holiday = null;
+  var holidaysTab = getConfigValue('HolidaysTab');
+  var hSheet = holidaysTab ? getSheetByName(holidaysTab) : null;
+  if (hSheet) {
+    var hHeaders = getHeaderRow(hSheet);
+    var hDateIdx = findColumnIndex(hHeaders, 'Date');
+    if (hDateIdx !== -1 && hSheet.getLastRow() > 1) {
+      var hReasonIdx = findColumnIndex(hHeaders, 'Reason');
+      var hOffIdx = findColumnIndex(hHeaders, 'Resource OFF');
+      var hRows = hSheet.getRange(2, 1, hSheet.getLastRow() - 1, hHeaders.length).getValues();
+      hRows.some(function (row) {
+        if (normalizeDateForCompare(row[hDateIdx], tz) !== today) return false;
+        holiday = {
+          reason: hReasonIdx !== -1 ? String(row[hReasonIdx] || '') : '',
+          resourceOff: hOffIdx !== -1 ? String(row[hOffIdx] || '') : '',
+        };
+        return true;
+      });
+    }
+  }
+
+  var leaves = [];
+  var plannedLeaveTab = getConfigValue('PlannedLeaveTab');
+  var lSheet = plannedLeaveTab ? getSheetByName(plannedLeaveTab) : null;
+  if (lSheet) {
+    var lHeaders = getHeaderRow(lSheet);
+    var lDateIdx = findColumnIndex(lHeaders, 'Date');
+    if (lDateIdx !== -1 && lSheet.getLastRow() > 1) {
+      var lNameIdx = findColumnIndex(lHeaders, 'Name');
+      var lReasonIdx = findColumnIndex(lHeaders, 'Reason');
+      var lRows = lSheet.getRange(2, 1, lSheet.getLastRow() - 1, lHeaders.length).getValues();
+      lRows.forEach(function (row) {
+        if (normalizeDateForCompare(row[lDateIdx], tz) !== today) return;
+        leaves.push({
+          name: lNameIdx !== -1 ? String(row[lNameIdx] || '') : '',
+          reason: lReasonIdx !== -1 ? String(row[lReasonIdx] || '') : '',
+        });
+      });
+    }
+  }
+
+  var message = null;
+  var messagesTab = getConfigValue('BannerMessagesTab') || BANNER_MESSAGES_TAB_NAME;
+  var mSheet = getSheetByName(messagesTab);
+  if (mSheet) {
+    var mHeaders = getHeaderRow(mSheet);
+    var mDateIdx = findColumnIndex(mHeaders, 'Date');
+    var mMsgIdx = findColumnIndex(mHeaders, 'Message');
+    if (mDateIdx !== -1 && mMsgIdx !== -1 && mSheet.getLastRow() > 1) {
+      var mRows = mSheet.getRange(2, 1, mSheet.getLastRow() - 1, mHeaders.length).getValues();
+      mRows.some(function (row) {
+        if (normalizeDateForCompare(row[mDateIdx], tz) !== today) return false;
+        message = String(row[mMsgIdx] || '') || null;
+        return true;
+      });
+    }
+  }
+
+  return { date: today, holiday: holiday, leaves: leaves, message: message };
+}
+
+/** Posts getTodayHighlights() to Teams via getTeamsWebhookUrl() — the
+ * same webhook Weekly Connect/the Friday reminder already use, set once
+ * and reused everywhere. Skipped entirely, quietly, on a day with
+ * nothing to report (no holiday, nobody on planned leave, no custom
+ * message) so the channel doesn't get a pointless daily "nothing today"
+ * post. _Config's DisableTodayHighlightsTeamsPost turns this off without
+ * touching the desktop banner — same independent-on/off split
+ * DisableWeeklyConnect draws between a tab and its own Teams post. Never
+ * throws — same {ok, message} contract postWeeklyConnectToTeams uses —
+ * and writes LastBannerPostStatus to _Config either way (kept separate
+ * from Weekly Connect's LastTeamsPostStatus so the two features' post
+ * history can't overwrite each other). */
+function postTodayHighlightsToTeams() {
+  if (getConfigValue('DisableTodayHighlightsTeamsPost') === 'TRUE') {
+    return { ok: true, message: 'Disabled via _Config — skipped.' };
+  }
+  var teamsWebhookUrl = getTeamsWebhookUrl();
+  if (!teamsWebhookUrl) {
+    return { ok: false, message: 'No Teams webhook configured.' };
+  }
+  var highlights = getTodayHighlights();
+  if (!highlights.holiday && !highlights.leaves.length && !highlights.message) {
+    return { ok: true, message: 'Nothing to report today — skipped.' };
+  }
+
+  var tz = Session.getScriptTimeZone();
+  var dateLabel = Utilities.formatDate(new Date(), tz, 'EEEE, MMM d');
+  var title = getConfigValue('TeamsBannerTitle') || "Today's Update";
+  var cardBody = [
+    { type: 'TextBlock', text: title + ' — ' + dateLabel, wrap: true, size: 'Medium', weight: 'Bolder' },
+  ];
+  if (highlights.holiday) {
+    cardBody.push({ type: 'TextBlock', text: '🎉 Holiday: ' + (highlights.holiday.reason || '(unnamed)'), wrap: true, spacing: 'Medium' });
+    if (highlights.holiday.resourceOff) {
+      cardBody.push({ type: 'TextBlock', text: 'Off: ' + highlights.holiday.resourceOff, wrap: true, size: 'Small', isSubtle: true });
+    }
+  }
+  if (highlights.leaves.length) {
+    var facts = highlights.leaves.map(function (l) {
+      return { title: l.name || '(unnamed)', value: l.reason || '' };
+    });
+    cardBody.push({ type: 'TextBlock', text: 'On planned leave today:', wrap: true, weight: 'Bolder', spacing: 'Medium' });
+    cardBody.push({ type: 'FactSet', facts: facts, spacing: 'Small' });
+  }
+  if (highlights.message) {
+    cardBody.push({ type: 'TextBlock', text: highlights.message, wrap: true, spacing: 'Medium' });
+  }
+
+  try {
+    var response = UrlFetchApp.fetch(teamsWebhookUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(buildAdaptiveCardPayload_(cardBody)),
+      muteHttpExceptions: true,
+    });
+    var statusCode = response.getResponseCode();
+    var succeeded = statusCode >= 200 && statusCode < 300;
+    var statusMsg = (succeeded ? 'OK' : 'FAILED') + ' (' + statusCode + ') — ' + new Date().toISOString() +
+      (succeeded ? '' : ' — response: ' + response.getContentText().slice(0, 300));
+    setConfigValue('LastBannerPostStatus', statusMsg);
+    return succeeded
+      ? { ok: true, message: "Posted today's highlights to Teams." }
+      : { ok: false, message: 'Teams rejected the post (HTTP ' + statusCode + ') — check LastBannerPostStatus in _Config.' };
+  } catch (err) {
+    setConfigValue('LastBannerPostStatus', 'ERROR — ' + new Date().toISOString() + ' — ' + err);
+    Logger.log('postTodayHighlightsToTeams failed: ' + err);
+    return { ok: false, message: 'Could not reach Teams: ' + err };
+  }
+}
+
+/** Installs (or reinstalls, if BannerPostHour changed) the daily trigger
+ * for postTodayHighlightsToTeams. Its own dedicated setup, same
+ * one-function-at-a-time pattern as ensureScheduledReportsTrigger_,
+ * deliberately NOT folded into the shared setupTriggers() (which deletes
+ * every trigger in the project) so reconfiguring this one's hour can
+ * never disturb the Friday reminder or the report dispatcher. Run this
+ * once from the editor, and again any time _Config's BannerPostHour
+ * changes — see the header comment's REQUIRED ONE-TIME SETUP section. */
+function ensureTodayHighlightsTrigger_() {
+  var hour = parseInt(getConfigValue('BannerPostHour'), 10);
+  if (isNaN(hour) || hour < 0 || hour > 23) hour = 9;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'postTodayHighlightsToTeams') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+  ScriptApp.newTrigger('postTodayHighlightsToTeams').timeBased().everyDays(1).atHour(hour).create();
+  Logger.log('Today-highlights Teams trigger installed for ' + hour + ':00 (script timezone).');
 }
 
 // -------------------- Report Configs (multiple, independent reports) --------------------

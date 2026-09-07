@@ -1,0 +1,198 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Today's Highlights</title>
+<style>
+  :root {
+    --brand: #6e1b2c;
+    --brand-hover: #872236;
+    --surface: #ffffff;
+    --text: #2a2020;
+    --text-dim: #7a6a6d;
+    --on-brand: #ffffff;
+    --on-brand-dim: #e8c9cf;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: transparent;
+    user-select: none;
+  }
+  #card {
+    /* No fixed/percentage height, same reasoning as the main popup's
+       #card — this must size itself to its real content so scrollHeight
+       reports a true value for the resize-to-fit IPC call below. */
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(160deg, var(--brand), var(--brand-hover));
+    border: 1px solid rgba(0,0,0,0.25);
+    border-radius: 16px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+    overflow: hidden;
+    cursor: pointer;
+  }
+  #titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 10px 12px 16px;
+    -webkit-app-region: drag;
+  }
+  #title {
+    color: var(--on-brand);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+  }
+  #close-btn {
+    -webkit-app-region: no-drag;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255,255,255,0.14);
+    color: var(--on-brand);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #close-btn:hover { background: rgba(255,255,255,0.28); }
+  #body {
+    padding: 4px 16px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .section {
+    background: rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .section-label {
+    color: var(--on-brand-dim);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .section-main {
+    color: var(--on-brand);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+  .section-sub {
+    color: var(--on-brand-dim);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .leave-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--on-brand);
+    font-size: 13px;
+    padding: 2px 0;
+  }
+  .leave-row + .leave-row { border-top: 1px solid rgba(255,255,255,0.12); }
+  .leave-name { font-weight: 600; }
+  .leave-reason { color: var(--on-brand-dim); text-align: right; }
+  #hint {
+    color: var(--on-brand-dim);
+    font-size: 10px;
+    text-align: center;
+    padding-bottom: 2px;
+  }
+</style>
+</head>
+<body>
+  <div id="card">
+    <div id="titlebar">
+      <div id="title">📌 Today</div>
+      <button id="close-btn" title="Dismiss">✕</button>
+    </div>
+    <div id="body"></div>
+    <div id="hint">Click to open the app</div>
+  </div>
+
+<script>
+  const bodyEl = document.getElementById('body');
+  const cardEl = document.getElementById('card');
+  const closeBtn = document.getElementById('close-btn');
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
+  function render(highlights) {
+    const parts = [];
+    if (highlights.holiday) {
+      parts.push(
+        '<div class="section">' +
+          '<div class="section-label">Holiday</div>' +
+          '<div class="section-main">🎉 ' + escapeHtml(highlights.holiday.reason || '(unnamed)') + '</div>' +
+          (highlights.holiday.resourceOff
+            ? '<div class="section-sub">Off: ' + escapeHtml(highlights.holiday.resourceOff) + '</div>'
+            : '') +
+        '</div>'
+      );
+    }
+    if (highlights.leaves && highlights.leaves.length) {
+      const rows = highlights.leaves.map((l) =>
+        '<div class="leave-row"><span class="leave-name">' + escapeHtml(l.name || '(unnamed)') +
+        '</span><span class="leave-reason">' + escapeHtml(l.reason || '') + '</span></div>'
+      ).join('');
+      parts.push(
+        '<div class="section">' +
+          '<div class="section-label">On planned leave today</div>' +
+          rows +
+        '</div>'
+      );
+    }
+    if (highlights.message) {
+      parts.push(
+        '<div class="section">' +
+          '<div class="section-label">Note</div>' +
+          '<div class="section-main" style="font-weight:400;">' + escapeHtml(highlights.message) + '</div>' +
+        '</div>'
+      );
+    }
+    bodyEl.innerHTML = parts.join('');
+  }
+
+  function resizeToFit() {
+    // Same resize-to-fit-content approach as the main popup's index.html
+    // — measure real content height, ask main to resize the actual OS
+    // window to match (a percentage/fixed height here can't do this,
+    // same reasoning as that file's own comment on #card).
+    const height = cardEl.scrollHeight;
+    if (window.statusApp && window.statusApp.resizeBanner) {
+      window.statusApp.resizeBanner(height);
+    }
+  }
+
+  if (window.statusApp && window.statusApp.onBannerData) {
+    window.statusApp.onBannerData((highlights) => {
+      render(highlights || {});
+      requestAnimationFrame(resizeToFit);
+    });
+  }
+
+  closeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (window.statusApp && window.statusApp.closeBanner) window.statusApp.closeBanner();
+  });
+  cardEl.addEventListener('click', () => {
+    if (window.statusApp && window.statusApp.openAppFromBanner) window.statusApp.openAppFromBanner();
+  });
+</script>
+</body>
+</html>

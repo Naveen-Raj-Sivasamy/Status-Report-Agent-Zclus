@@ -59,4 +59,8 @@ contextBridge.exposeInMainWorld('statusApp', {
   saveConnectionConfig: (conn) => ipcRenderer.invoke('save-connection-config', conn),
   openConnectionSettings: () => ipcRenderer.invoke('open-connection-settings'),
   openManageScreen: () => ipcRenderer.invoke('open-manage-screen'),
+  onBannerData: (callback) => ipcRenderer.on('banner-data', (_e, data) => callback(data)),
+  closeBanner: () => ipcRenderer.invoke('close-banner'),
+  openAppFromBanner: () => ipcRenderer.invoke('open-app-from-banner'),
+  resizeBanner: (height) => ipcRenderer.send('resize-banner-window', height),
 });

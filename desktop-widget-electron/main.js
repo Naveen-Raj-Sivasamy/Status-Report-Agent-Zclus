@@ -224,6 +224,7 @@ let floatBtn = null;
 let setupWin = null;
 let connectWin = null;
 let manageWin = null;
+let bannerWin = null;
 
 // -------------------- backend calls (with retry) --------------------
 
@@ -1081,6 +1082,121 @@ function positionPopupNearWindow(refBounds) {
   popup.setPosition(x, y, false);
 }
 
+// -------------------- Today's Highlights banner --------------------
+//
+// A small always-on-top "poster" window that shows itself, unprompted,
+// once a day — separate from the tray/float-button popup, which only
+// ever appears on a click. Content (holiday/who's on leave/custom
+// message) comes entirely from the backend's todayHighlights action (see
+// getTodayHighlights() in Code.gs) — nothing about any client's actual
+// holidays or people is hardcoded here, only the window's own chrome.
+
+// yyyy-MM-dd in LOCAL time (not toISOString's UTC) — this only has to
+// match itself day over day on this one machine, so local calendar day is
+// the right notion of "today" for "already shown today", not UTC.
+function localDateString(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+// Called once at launch (see startMainApp) — matches what was chosen for
+// this feature: once per day, first check after startup, not on every
+// periodic refresh. Best-effort throughout: a failed/slow backend call
+// here should never interrupt startup or show an error dialog, same
+// reasoning as checkForUpdatesInBackground().
+async function checkTodayHighlights() {
+  try {
+    const today = localDateString(new Date());
+    if (loadUserConfig().lastBannerShownDate === today) return; // already shown (and presumably seen/dismissed) today
+
+    const data = await apiGet({ action: 'todayHighlights' }, { attempts: 1 });
+    const h = data && data.highlights;
+    if (!h || (!h.holiday && (!h.leaves || !h.leaves.length) && !h.message)) return; // nothing to show today
+
+    // Marked BEFORE showing, not on dismiss — "once per day" means the
+    // banner only ever SHOWS itself once per day; someone leaving it open
+    // (per the "stay until clicked or closed" choice) shouldn't cause it
+    // to show again if the app happens to restart later the same day.
+    saveUserConfig({ lastBannerShownDate: today });
+    createBannerWindow(h);
+  } catch {
+    /* best-effort — never block/interrupt the app over this */
+  }
+}
+
+const MIN_BANNER_HEIGHT = 140;
+const MAX_BANNER_HEIGHT = 480;
+
+function createBannerWindow(highlights) {
+  if (bannerWin && !bannerWin.isDestroyed()) bannerWin.close();
+
+  const win = new BrowserWindow({
+    width: 340,
+    height: 220, // corrected to fit real content right after first paint, same resize-to-fit pattern as the main popup
+    show: false,
+    frame: false,
+    resizable: false,
+    fullscreenable: false,
+    minimizable: false,
+    maximizable: false,
+    skipTaskbar: true,
+    backgroundColor: '#00000000',
+    transparent: true,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.loadFile(path.join(__dirname, 'renderer', 'banner.html'));
+  win.webContents.once('did-finish-load', () => win.webContents.send('banner-data', highlights));
+  win.once('ready-to-show', () => {
+    positionBannerTopRight(win);
+    win.show();
+  });
+  win.on('closed', () => {
+    if (bannerWin === win) bannerWin = null;
+  });
+  bannerWin = win;
+  return win;
+}
+
+// Top-right corner of the primary display's work area (clear of the
+// taskbar) — deliberately independent of the tray icon/float button
+// position, since this shows itself unprompted rather than anchored to
+// something the person just clicked.
+function positionBannerTopRight(win) {
+  const workArea = screen.getPrimaryDisplay().workArea;
+  const bounds = win.getBounds();
+  const x = workArea.x + workArea.width - bounds.width - 16;
+  const y = workArea.y + 16;
+  win.setPosition(x, y, false);
+}
+
+ipcMain.handle('close-banner', () => {
+  if (bannerWin && !bannerWin.isDestroyed()) bannerWin.close();
+});
+ipcMain.handle('open-app-from-banner', () => {
+  if (bannerWin && !bannerWin.isDestroyed()) bannerWin.close();
+  toggleWindow();
+});
+// Same resize-to-fit-content idea as the main popup's 'resize-window' —
+// separate channel/window since the banner is a different BrowserWindow.
+ipcMain.on('resize-banner-window', (_e, height) => {
+  if (!bannerWin || bannerWin.isDestroyed()) return;
+  const clamped = Math.max(MIN_BANNER_HEIGHT, Math.min(MAX_BANNER_HEIGHT, Math.round(height)));
+  const [width, currentHeight] = bannerWin.getSize();
+  if (clamped === currentHeight) return;
+  bannerWin.setSize(width, clamped);
+  positionBannerTopRight(bannerWin); // re-anchor to the corner since height changed
+});
+
+
 // restoreFloatBtn=false is for open-connection-settings/open-manage-screen
 // below: they hide the popup only to get it out from under a DIFFERENT
 // window they're about to show (it's alwaysOnTop, see their own comments),
@@ -1284,6 +1400,8 @@ function startMainApp() {
 
   popup = createPopup();
   floatBtn = createFloatButton();
+
+  checkTodayHighlights(); // once at launch — see its own comment for why not on an interval
 
   cleanStaleUpdaterCacheIfVersionChanged(); // clear out any installer left over from the update that got us to this version
   checkForUpdatesInBackground(); // once at launch...

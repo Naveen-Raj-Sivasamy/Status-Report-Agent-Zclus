@@ -623,7 +623,15 @@ ipcMain.handle('check-latest-version', async () => {
     // up and silently hiding the update banner the moment the backend has
     // one slow beat — which is what made the banner flicker in and out
     // across relaunches even though a newer version really was available.
-    return await apiGet({ action: 'version' }, { attempts: 6 });
+    const result = await apiGet({ action: 'version' }, { attempts: 6 });
+    // isWindows tells the renderer's forced-update-gate whether a silent
+    // background download is already underway (electron-updater, Windows
+    // only — see the comment above autoUpdater.autoDownload below) so it
+    // can show a passive "downloading, restart will appear automatically"
+    // wait state there instead of a manual "Download update" browser link
+    // that's redundant with — and more confusing than — the real download
+    // already happening in the background.
+    return result ? Object.assign({}, result, { isWindows: process.platform === 'win32' }) : null;
   } catch {
     return null; // still never block the app on a version check
   }

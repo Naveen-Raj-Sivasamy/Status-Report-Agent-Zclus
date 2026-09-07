@@ -1850,7 +1850,20 @@
   // open (the Windows-only autoUpdater check on a timer in main.js isn't
   // tied to the popup being open at all) — flips the banner over live,
   // same end state as checkForcedUpdateGate() finding it already downloaded.
-  window.statusApp.onUpdateDownloaded(() => showUpdateReadyToInstall());
+  //
+  // If the forced gate below is currently showing its "downloading in the
+  // background" waiting screen, flip it straight to "Restart to update"
+  // right now too — don't make anyone wait out the poll interval below
+  // when the real event just told us it's done.
+  let forcedGatePollTimer = null;
+  window.statusApp.onUpdateDownloaded(() => {
+    showUpdateReadyToInstall();
+    if (forcedGatePollTimer) {
+      clearInterval(forcedGatePollTimer);
+      forcedGatePollTimer = null;
+      showForcedUpdateGate({ ready: true });
+    }
+  });
 
   // The hard gate: replaces the whole screen with an update prompt and
   // hides Settings, leaving only the update action itself and the
@@ -1873,23 +1886,67 @@
   // that machine to trigger it. Someone stuck like that needs one manual
   // reinstall of the current installer; after that, this gate (and
   // Windows' silent auto-update) covers them going forward.
-  function showForcedUpdateGate({ ready, version, downloadUrl }) {
+  function showForcedUpdateGate({ ready, version, downloadUrl, waiting }) {
     els.footer.classList.add('hidden');
     els.reportActions.classList.add('hidden');
     els.settingsBtn.style.display = 'none';
     els.sub.textContent = 'Update required';
     els.main.style.minHeight = '';
+
+    let message;
+    let buttonLabel = null;
+    if (ready) {
+      message = 'A newer version has already downloaded in the background — restart to finish updating and continue.';
+      buttonLabel = 'Restart to update';
+    } else if (waiting) {
+      // Windows: electron-updater is already downloading this silently in
+      // the background (see the comment in checkForcedUpdateGate below) —
+      // there's nothing to click yet. This screen flips itself to "Restart
+      // to update" on its own, either via the live onUpdateDownloaded
+      // event above or the poll in startForcedGatePolling() below.
+      message = `A newer version${version ? ` (v${escapeHtml(version)})` : ''} is downloading in the background. This screen will switch to "Restart to update" automatically as soon as it's ready — no action needed yet.`;
+    } else {
+      message = `A newer version${version ? ` (v${escapeHtml(version)})` : ''} is available. This build is no longer supported — update to continue.`;
+      buttonLabel = 'Download update';
+    }
+
     els.main.innerHTML = `
-      <p class="login-hint">${ready
-        ? 'A newer version has already downloaded in the background — restart to finish updating and continue.'
-        : `A newer version${version ? ` (v${escapeHtml(version)})` : ''} is available. This build is no longer supported — update to continue.`}</p>
-      <button class="primary" id="force-update-btn" style="width:100%;">${ready ? 'Restart to update' : 'Download update'}</button>
+      <p class="login-hint">${message}</p>
+      ${buttonLabel
+        ? `<button class="primary" id="force-update-btn" style="width:100%;">${buttonLabel}</button>`
+        : '<p class="login-hint" style="text-align:center;">⏳ Downloading…</p>'}
       <p class="login-hint" style="margin-top:10px;">Can't update right now? Use "Contact Admin" below.</p>
     `;
-    document.getElementById('force-update-btn').onclick = () => {
-      if (ready) window.statusApp.quitAndInstall();
-      else if (downloadUrl) window.statusApp.openExternal(downloadUrl);
-    };
+    if (buttonLabel) {
+      document.getElementById('force-update-btn').onclick = () => {
+        if (ready) window.statusApp.quitAndInstall();
+        else if (downloadUrl) window.statusApp.openExternal(downloadUrl);
+      };
+    }
+
+    if (waiting) startForcedGatePolling();
+  }
+
+  // Backs up the live onUpdateDownloaded event above for the case where the
+  // download finishes while this popup is closed/hidden (reopening later
+  // re-renders via checkForcedUpdateGate anyway, but this also covers the
+  // rarer case of the IPC event itself getting missed) — polls the same
+  // in-memory flag main.js already exposes rather than re-hitting the
+  // backend, so it's cheap enough to run every few seconds for as long as
+  // the wait lasts, and it stops itself the moment it finds ready===true.
+  function startForcedGatePolling() {
+    if (forcedGatePollTimer) return;
+    forcedGatePollTimer = setInterval(async () => {
+      try {
+        if (await window.statusApp.isUpdateReadyToInstall()) {
+          clearInterval(forcedGatePollTimer);
+          forcedGatePollTimer = null;
+          showForcedUpdateGate({ ready: true });
+        }
+      } catch {
+        /* best-effort — next tick tries again */
+      }
+    }, 3000);
   }
 
   async function checkForcedUpdateGate() {
@@ -1904,7 +1961,22 @@
 
       const latest = await window.statusApp.checkLatestVersion();
       if (latest && latest.ok && latest.latest && isNewerVersion(latest.latest, version)) {
-        showForcedUpdateGate({ ready: false, version: latest.latest, downloadUrl: latest.downloadUrl });
+        // On Windows, electron-updater is already silently downloading this
+        // in the background (autoDownload=true in main.js) — showing a
+        // manual "Download update" browser-link screen on top of that is
+        // exactly the confusing, redundant screen this was changed to
+        // avoid. Show the passive waiting state instead; it flips itself
+        // to "Restart to update" once the download actually finishes, no
+        // popup close/reopen required. Mac has no autoUpdater (see the
+        // comment above autoUpdater.autoDownload in main.js) so it keeps
+        // the original manual-download link — nothing is being fetched in
+        // the background there to wait on.
+        showForcedUpdateGate({
+          ready: false,
+          version: latest.latest,
+          downloadUrl: latest.downloadUrl,
+          waiting: !!latest.isWindows,
+        });
         return true;
       }
     } catch {

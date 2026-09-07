@@ -1379,8 +1379,12 @@ var LEAVE_TAB_NAME = 'Leave';
  * doesn't already exist — same self-creating pattern as _Config. A no-op
  * every time after that (cheap existence check), and never touches the
  * tab again once it's there, so renaming columns or adding your own is
- * completely safe. */
+ * completely safe. _Config's DisableLeaveTab (see ensureConfigDefaults_)
+ * is what makes a deletion of this tab actually stick, same
+ * flag-then-delete order ensureWeeklyConnectTab()'s own comment
+ * describes for Weekly_Connect. */
 function ensureLeaveTab() {
+  if (getConfigValue('DisableLeaveTab') === 'TRUE') return;
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (ss.getSheetByName(LEAVE_TAB_NAME)) return;
   var sheet = ss.insertSheet(LEAVE_TAB_NAME);
@@ -2821,6 +2825,17 @@ function ensureConfigDefaults_(sheet) {
     // own comment for what flipping this to 'TRUE' actually does (stops
     // it self-healing back after you delete it).
     ['DisableWeeklyConnect', 'FALSE'],
+    // 'FALSE' by default, same reasoning as DisableWeeklyConnect above —
+    // this is the fix for the gap that let Leave keep reappearing no
+    // matter how many times it was deleted: unlike Weekly_Connect, Leave
+    // never had an off-switch at all, so ensureLeaveTab() recreated it
+    // unconditionally, every time (it runs on the same hot tab-list-read
+    // path). Flip this to 'TRUE' (Sheet, or Manage -> App Settings),
+    // THEN delete the Leave tab and its _Categories rows — same order-
+    // matters rule DisableWeeklyConnect follows, and for the same reason:
+    // setting the flag doesn't retroactively remove anything already
+    // there.
+    ['DisableLeaveTab', 'FALSE'],
     // ---- Today's Highlights (holiday/leave/message banner + Teams post) ----
     // Every value below is a pointer, never client data itself — the
     // actual holiday names, who's on leave, and any custom message all

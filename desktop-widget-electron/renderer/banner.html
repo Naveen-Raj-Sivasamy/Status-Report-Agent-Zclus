@@ -62,6 +62,122 @@
     justify-content: center;
   }
   #close-btn:hover { background: rgba(255,255,255,0.28); }
+
+  /* ---------------- OOO runner + rocket stage ----------------
+     Purely decorative, sits above #body, only shown on days with at
+     least one planned-leave entry (see startStage()/stopStage() below).
+     Fixed height (doesn't grow/shrink with content) so it never fights
+     the resize-to-fit measurement below — it's just always-there space,
+     shown or hidden as a whole. */
+  #stage {
+    position: relative;
+    height: 96px;
+    margin: 0 16px 10px 16px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.07);
+    overflow: hidden;
+  }
+  #stage.hidden { display: none; }
+
+  #rocket {
+    position: absolute;
+    left: 50%;
+    bottom: -14px;
+    transform: translateX(-50%);
+    font-size: 28px;
+    opacity: 0;
+    pointer-events: none;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35));
+  }
+  #rocket.launch {
+    animation: rocket-launch 1.15s cubic-bezier(.25,.65,.2,1) forwards;
+  }
+  @keyframes rocket-launch {
+    0%   { bottom: -14px; opacity: 1; transform: translateX(-50%) rotate(0deg); }
+    65%  { bottom: 60px;  opacity: 1; transform: translateX(-50%) rotate(-8deg); }
+    100% { bottom: 68px;  opacity: 0; transform: translateX(-50%) rotate(-8deg); }
+  }
+
+  #sparks {
+    position: absolute;
+    left: 50%;
+    top: 14px;
+    width: 0;
+    height: 0;
+  }
+  .spark {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .spark.burst {
+    animation: spark-burst 1s ease-out forwards;
+  }
+  @keyframes spark-burst {
+    0%   { opacity: 1; transform: rotate(var(--angle)) translateX(0); }
+    100% { opacity: 0; transform: rotate(var(--angle)) translateX(var(--dist)); }
+  }
+
+  #runner-track {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: 8px;
+    height: 44px;
+  }
+  #runner {
+    position: absolute;
+    bottom: 0;
+    left: -44px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    opacity: 0;
+  }
+  #runner.running {
+    animation: run-across 3.2s linear forwards;
+  }
+  @keyframes run-across {
+    0%   { left: -44px; opacity: 1; }
+    92%  { opacity: 1; }
+    100% { left: 100%;  opacity: 0; }
+  }
+  #runner-name {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 8px;
+    color: #fff;
+    white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+  #runner-name.boy { background: #2f6fed; }
+  #runner-name.girl { background: #e05aa0; }
+  #runner-name.neutral { background: #7a6a90; }
+  #runner-badge {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    animation: run-bounce 0.26s ease-in-out infinite alternate;
+  }
+  #runner-badge.boy { background: #2f6fed; }
+  #runner-badge.girl { background: #e05aa0; }
+  #runner-badge.neutral { background: #7a6a90; }
+  @keyframes run-bounce {
+    from { transform: translateY(0); }
+    to   { transform: translateY(-4px); }
+  }
+
   #body {
     padding: 4px 16px 16px 16px;
     display: flex;
@@ -117,6 +233,21 @@
       <div id="title">📌 Today</div>
       <button id="close-btn" title="Dismiss">✕</button>
     </div>
+
+    <!-- OOO stage: rocket/firework + one runner per person on planned
+         leave, cycled in sequence. Hidden entirely on a day with no
+         leaves — see startStage()/stopStage(). -->
+    <div id="stage" class="hidden">
+      <div id="rocket">🚀</div>
+      <div id="sparks"></div>
+      <div id="runner-track">
+        <div id="runner">
+          <div id="runner-name" class="neutral"></div>
+          <div id="runner-badge" class="neutral">🏃</div>
+        </div>
+      </div>
+    </div>
+
     <div id="body"></div>
     <div id="hint">Click to open the app</div>
   </div>
@@ -125,6 +256,12 @@
   const bodyEl = document.getElementById('body');
   const cardEl = document.getElementById('card');
   const closeBtn = document.getElementById('close-btn');
+  const stageEl = document.getElementById('stage');
+  const rocketEl = document.getElementById('rocket');
+  const sparksEl = document.getElementById('sparks');
+  const runnerEl = document.getElementById('runner');
+  const runnerNameEl = document.getElementById('runner-name');
+  const runnerBadgeEl = document.getElementById('runner-badge');
 
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
@@ -132,7 +269,81 @@
     ));
   }
 
+  // ---------------- OOO stage: rocket/firework + runner ----------------
+  // "character" comes straight from an optional "Character" column on the
+  // Planned Leave sheet (Code.gs's getTodayHighlights) — Boy/Girl, entered
+  // by whoever logs the leave. Nothing here guesses gender from a name:
+  // anything not exactly "boy" or "girl" (including a blank column, or the
+  // column not existing at all) falls back to a neutral color so a person
+  // who hasn't been given a Character yet still gets their own runner and
+  // name, just without a blue/pink color choice attached to them.
+  const SPARK_COLORS = ['#ffd166', '#ef476f', '#06d6a0', '#118ab2', '#ffffff', '#f7b32b'];
+  const SPARK_COUNT = 12;
+
+  let runnerQueue = [];
+  let runnerIdx = 0;
+  let runnerTimer = null;
+
+  function launchRocket() {
+    sparksEl.innerHTML = '';
+    for (let i = 0; i < SPARK_COUNT; i++) {
+      const s = document.createElement('div');
+      s.className = 'spark';
+      s.style.setProperty('--angle', Math.round((360 / SPARK_COUNT) * i) + 'deg');
+      s.style.setProperty('--dist', (110 + (i % 3) * 12) + 'px');
+      s.style.background = SPARK_COLORS[i % SPARK_COLORS.length];
+      sparksEl.appendChild(s);
+    }
+    // Restart the CSS animation from scratch even if it's still mid-run
+    // from a previous stage/day (removing+re-adding the class alone won't
+    // restart it without a reflow in between).
+    rocketEl.classList.remove('launch');
+    void rocketEl.offsetWidth;
+    rocketEl.classList.add('launch');
+    setTimeout(() => {
+      Array.from(sparksEl.children).forEach((s) => s.classList.add('burst'));
+    }, 740); // lines up with the rocket reaching the top of rocket-launch above
+  }
+
+  function runNextPerson() {
+    if (!runnerQueue.length) return;
+    const person = runnerQueue[runnerIdx % runnerQueue.length];
+    runnerIdx++;
+    const kind = person.character === 'boy' ? 'boy' : person.character === 'girl' ? 'girl' : 'neutral';
+    runnerNameEl.textContent = person.name || 'Out today';
+    runnerNameEl.className = kind;
+    runnerBadgeEl.className = kind;
+    runnerBadgeEl.textContent = kind === 'girl' ? '🏃‍♀️' : '🏃';
+    runnerEl.classList.remove('running');
+    void runnerEl.offsetWidth;
+    runnerEl.classList.add('running');
+    runnerTimer = setTimeout(runNextPerson, 3700); // a beat after the 3.2s crossing finishes
+  }
+
+  function startStage(leaves) {
+    clearTimeout(runnerTimer);
+    runnerQueue = leaves;
+    runnerIdx = 0;
+    stageEl.classList.remove('hidden');
+    launchRocket();
+    runNextPerson();
+  }
+
+  function stopStage() {
+    clearTimeout(runnerTimer);
+    runnerTimer = null;
+    runnerQueue = [];
+    stageEl.classList.add('hidden');
+    runnerEl.classList.remove('running');
+  }
+
   function render(highlights) {
+    if (highlights.leaves && highlights.leaves.length) {
+      startStage(highlights.leaves);
+    } else {
+      stopStage();
+    }
+
     const parts = [];
     if (highlights.holiday) {
       parts.push(
@@ -172,7 +383,9 @@
     // Same resize-to-fit-content approach as the main popup's index.html
     // — measure real content height, ask main to resize the actual OS
     // window to match (a percentage/fixed height here can't do this,
-    // same reasoning as that file's own comment on #card).
+    // same reasoning as that file's own comment on #card). Runs after
+    // render() has already shown/hidden #stage, so the measurement below
+    // already reflects whichever state it's in.
     const height = cardEl.scrollHeight;
     if (window.statusApp && window.statusApp.resizeBanner) {
       window.statusApp.resizeBanner(height);

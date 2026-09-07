@@ -106,8 +106,10 @@
   .ok { color: #c9f7d1; font-size: 11px; font-weight: 700; margin-top: 8px; min-height: 14px; }
   .hidden { display: none !important; }
   hr { border: none; border-top: 1px solid rgba(255,255,255,0.18); margin: 6px 0 16px; }
-  .cat-tabs { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 0; }
-  .cat-tabs label { font-size: 12px; display: flex; align-items: center; gap: 5px; }
+  .cat-tab-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; }
+  .cat-tab-empty { font-size: 11.5px; color: #e8c9cf; font-style: italic; }
+  .cat-tab-adder { display: flex; gap: 8px; margin-top: 8px; }
+  .cat-tab-adder select { flex: 1; }
   .compare-table { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
   .compare-row {
     display: grid; grid-template-columns: 1fr 92px 92px; align-items: center;
@@ -226,7 +228,7 @@
 
     <div class="section">
       <h3>Landing-Screen Categories</h3>
-      <p class="hint">Group tabs under a category button. A tab left unchecked everywhere still shows, just ungrouped.</p>
+      <p class="hint">Group tabs under a category button, picked from the dropdown below each one. A tab not added to any category still shows, just ungrouped.</p>
       <div id="cat-groups"></div>
       <div class="row-actions">
         <button class="secondary" id="add-category-btn">+ Add category</button>
@@ -773,20 +775,88 @@
     header.appendChild(del);
     group.appendChild(header);
 
-    const tabsWrap = document.createElement('div');
-    tabsWrap.className = 'cat-tabs';
-    const selected = new Set(tabs || []);
-    liveTabs.forEach((t) => {
-      const label = document.createElement('label');
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.value = t;
-      cb.checked = selected.has(t);
-      label.appendChild(cb);
-      label.appendChild(document.createTextNode(' ' + t));
-      tabsWrap.appendChild(label);
+    // Selected tabs for this category, in the order they were added. Kept
+    // in this closure (not derived from checkbox state — there's no
+    // checkbox grid any more) and exposed via group.getSelectedTabs() for
+    // save-categories-btn below. Starts from whatever was already saved,
+    // dropping any tab that no longer exists on the sheet (e.g. renamed
+    // outside the app) so a stale name can't get re-saved untouched.
+    let selectedTabs = (tabs || []).filter((t) => liveTabs.indexOf(t) !== -1);
+
+    const chipsWrap = document.createElement('div');
+    chipsWrap.className = 'cat-tab-chips';
+
+    const adderRow = document.createElement('div');
+    adderRow.className = 'cat-tab-adder';
+    const select = document.createElement('select');
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'icon-btn';
+    addBtn.textContent = '+ Add';
+
+    function renderChips() {
+      chipsWrap.innerHTML = '';
+      selectedTabs.forEach((t) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip selected';
+        chip.textContent = t + ' ✕';
+        chip.title = 'Remove ' + t + ' from this category';
+        chip.onclick = () => {
+          selectedTabs = selectedTabs.filter((x) => x !== t);
+          renderChips();
+          renderSelectOptions();
+        };
+        chipsWrap.appendChild(chip);
+      });
+      if (!selectedTabs.length) {
+        const empty = document.createElement('span');
+        empty.className = 'cat-tab-empty';
+        empty.textContent = 'No tabs added yet.';
+        chipsWrap.appendChild(empty);
+      }
+    }
+
+    function renderSelectOptions() {
+      // Only offers tabs not already added to THIS category — a tab can
+      // still belong to more than one category at once (e.g. the same
+      // tab showing under two different category buttons), this just
+      // stops it being added twice within the same one.
+      const available = liveTabs.filter((t) => selectedTabs.indexOf(t) === -1);
+      select.innerHTML = '';
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = available.length ? 'Add a tab…' : 'All tabs added';
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      select.appendChild(placeholder);
+      available.forEach((t) => {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t;
+        select.appendChild(opt);
+      });
+      select.disabled = !available.length;
+      addBtn.disabled = !available.length;
+    }
+
+    addBtn.addEventListener('click', () => {
+      const val = select.value;
+      if (!val) return;
+      selectedTabs.push(val);
+      renderChips();
+      renderSelectOptions();
     });
-    group.appendChild(tabsWrap);
+
+    renderChips();
+    renderSelectOptions();
+
+    adderRow.appendChild(select);
+    adderRow.appendChild(addBtn);
+    group.appendChild(chipsWrap);
+    group.appendChild(adderRow);
+
+    group.getSelectedTabs = () => selectedTabs.slice();
 
     return group;
   }
@@ -801,7 +871,7 @@
     groups.forEach((g) => {
       const name = g.querySelector('.cat-name-input').value.trim();
       if (!name) return;
-      const tabs = Array.from(g.querySelectorAll('.cat-tabs input[type=checkbox]:checked')).map((c) => c.value);
+      const tabs = typeof g.getSelectedTabs === 'function' ? g.getSelectedTabs() : [];
       if (tabs.length) map[name] = tabs;
     });
     await saveSection('save-categories-btn', 'cat-err', 'cat-ok', () => window.statusApp.saveCategories(map));

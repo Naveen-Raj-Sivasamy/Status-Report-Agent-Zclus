@@ -3029,12 +3029,19 @@ function getTodayHighlights() {
     if (lDateIdx !== -1 && lSheet.getLastRow() > 1) {
       var lNameIdx = findColumnIndex(lHeaders, 'Name');
       var lReasonIdx = findColumnIndex(lHeaders, 'Reason');
+      // Optional — entirely opt-in per organization. If the sheet has no
+      // "Character" column at all, lCharIdx is -1 and every leave just gets
+      // character: '', which the banner renders as a neutral runner (see
+      // banner.html). Nothing here guesses gender from a name; it only
+      // ever reads a value someone explicitly typed into this column.
+      var lCharIdx = findColumnIndex(lHeaders, 'Character');
       var lRows = lSheet.getRange(2, 1, lSheet.getLastRow() - 1, lHeaders.length).getValues();
       lRows.forEach(function (row) {
         if (normalizeDateForCompare(row[lDateIdx], tz) !== today) return;
         leaves.push({
           name: lNameIdx !== -1 ? String(row[lNameIdx] || '') : '',
           reason: lReasonIdx !== -1 ? String(row[lReasonIdx] || '') : '',
+          character: lCharIdx !== -1 ? String(row[lCharIdx] || '').trim().toLowerCase() : '',
         });
       });
     }

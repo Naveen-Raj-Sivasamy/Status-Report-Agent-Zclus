@@ -1,0 +1,23 @@
+how it works from here on:
+
+cd "A:\Zclus\Fairview\Status Report Tracker Agent"
+
+
+For a backend/logic change (anything in Code.gs — like what we fixed today):
+
+git add apps-script/Code.gs
+git commit -m "whatever you changed"
+git push origin main
+
+That's it. The push alone triggers the workflow, which pushes the code to Apps Script and redeploys it to the same URL — usually done within a minute. Nothing else to do, nobody needs to reinstall anything.
+
+For an app/UI change that needs a new installer (something in desktop-widget-electron):
+
+# bump "version" in desktop-widget-electron/package.json first, then:
+git add .
+git commit -m "whatever you changed"
+git push origin main
+git tag v1.3.0
+git push origin v1.3.0
+
+Pushing the tag triggers the build workflow: it builds the .exe on a clean Windows machine in the cloud, publishes it as a GitHub Release, and pings the Apps Script backend to bump LatestVersion — so everyone still on the old version sees the update banner automatically within a few minutes, with a working download link.

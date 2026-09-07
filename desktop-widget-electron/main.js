@@ -476,6 +476,11 @@ ipcMain.handle('submit-entry', async (event, { tab, values }) => {
       },
     });
     refreshColumnsCache(tab); // e.g. so the next "Cleanup Number" reflects this new row right away
+    // Covers the "I just entered my own leave" case immediately, rather
+    // than waiting for the 5-minute periodic check — harmless no-op for
+    // every other tab (checkTodayHighlights re-reads todayHighlights
+    // fresh and only shows a window when the content actually changed).
+    if (result && result.ok !== false) checkTodayHighlights();
     return result;
   } finally {
     pendingSubmitTabs.delete(tab);
@@ -1124,25 +1129,42 @@ function localDateString(date) {
   return `${y}-${m}-${d}`;
 }
 
-// Called once at launch (see startMainApp) — matches what was chosen for
-// this feature: once per day, first check after startup, not on every
-// periodic refresh. Best-effort throughout: a failed/slow backend call
-// here should never interrupt startup or show an error dialog, same
-// reasoning as checkForUpdatesInBackground().
+// Called once at launch AND periodically after that (see startMainApp),
+// plus right after this machine's own submit-entry — todayHighlights on
+// the backend is never cached (see Code.gs's own comment on that action),
+// so a leave entered anywhere — this app's own form or a colleague
+// editing the Sheet directly — is visible on the very next call here.
+// What used to gate a re-show was "already shown today" as a plain
+// boolean, which meant a leave entered AFTER the once-a-day check (or
+// after the banner had already been shown/dismissed) never appeared
+// until the next restart — that's the bug this signature-based compare
+// fixes: re-showing is gated on the CONTENT being new, not the date,
+// so the same unchanged holiday/leave list doesn't nag on every periodic
+// check, but a genuinely new entry shows itself right away. Best-effort
+// throughout: a failed/slow backend call here should never interrupt
+// startup or show an error dialog, same reasoning as
+// checkForUpdatesInBackground().
 async function checkTodayHighlights() {
   try {
     const today = localDateString(new Date());
-    if (loadUserConfig().lastBannerShownDate === today) return; // already shown (and presumably seen/dismissed) today
-
     const data = await apiGet({ action: 'todayHighlights' }, { attempts: 1 });
     const h = data && data.highlights;
     if (!h || (!h.holiday && (!h.leaves || !h.leaves.length) && !h.message)) return; // nothing to show today
 
-    // Marked BEFORE showing, not on dismiss — "once per day" means the
-    // banner only ever SHOWS itself once per day; someone leaving it open
-    // (per the "stay until clicked or closed" choice) shouldn't cause it
-    // to show again if the app happens to restart later the same day.
-    saveUserConfig({ lastBannerShownDate: today });
+    // Cheap deterministic signature of what today's banner would show —
+    // getTodayHighlights() reads its sheets top-to-bottom every time, so a
+    // newly-added row appends rather than reshuffling existing ones,
+    // making a straight JSON.stringify a reliable "did anything change"
+    // check without needing a real diff.
+    const signature = JSON.stringify(h);
+    const cfg = loadUserConfig();
+    if (cfg.lastBannerShownDate === today && cfg.lastBannerSignature === signature) {
+      return; // already shown today with this exact content — don't nag
+    }
+
+    // Marked BEFORE showing, not on dismiss — same reasoning as before,
+    // just keyed on content now instead of only the date.
+    saveUserConfig({ lastBannerShownDate: today, lastBannerSignature: signature });
     createBannerWindow(h);
   } catch {
     /* best-effort — never block/interrupt the app over this */
@@ -1424,7 +1446,14 @@ function startMainApp() {
   popup = createPopup();
   floatBtn = createFloatButton();
 
-  checkTodayHighlights(); // once at launch — see its own comment for why not on an interval
+  checkTodayHighlights(); // once at launch...
+  // ...and every 5 minutes after, so a leave entered any time during the
+  // day — from this app's own form or straight on the Sheet — shows up
+  // without needing a restart. Cheap: todayHighlights isn't cached
+  // server-side, and checkTodayHighlights itself no-ops (no window, no
+  // extra work) whenever nothing has actually changed since the last
+  // check — see its own comment.
+  setInterval(checkTodayHighlights, 5 * 60 * 1000);
 
   cleanStaleUpdaterCacheIfVersionChanged(); // clear out any installer left over from the update that got us to this version
   checkForUpdatesInBackground(); // once at launch...

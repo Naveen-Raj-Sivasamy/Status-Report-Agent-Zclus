@@ -5,17 +5,19 @@
 <title>Report Generator</title>
 <style>
   :root {
-    --brand: #6e1b2c;
-    --brand-hover: #872236;
-    --surface: #ffffff;
-    --surface-hover: #f4eef0;
-    --border: #e7dade;
-    --text: #2a2020;
-    --text-dim: #7a6a6d;
-    --on-brand: #ffffff;
-    --on-brand-dim: #e8c9cf;
+    --brand: #16332a;
+    --brand-hover: #234c3d;
+    --surface: #f6f1e6;
+    --surface-hover: #efe6d3;
+    --border: #ddd3bd;
+    --text: #1c3a2f;
+    --text-dim: #86807a;
+    --on-brand: #f3ede0;
+    --on-brand-dim: #b9ab86;
     --danger: #c0392b;
     --success: #2e8b57;
+    --gold: #c9a15f;
+    --gold-bright: #d8b877;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   }
   * { box-sizing: border-box; }
@@ -120,14 +122,14 @@
   }
   .update-link {
     display: none; align-items: center; gap: 4px;
-    background: linear-gradient(135deg, #ffe08a, #ffb700);
-    color: #2a2020; font-size: 10.5px; font-weight: 800;
+    background: linear-gradient(135deg, #d8b877, #c9a15f);
+    color: #1c3a2f; font-size: 10.5px; font-weight: 800;
     border: none; border-radius: 999px; padding: 5px 10px;
     cursor: pointer; -webkit-app-region: no-drag;
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }
   .update-link::before { content: "\2728"; font-size: 10px; }
-  .update-link:hover { background: linear-gradient(135deg, #ffe9a8, #ffc633); }
+  .update-link:hover { background: linear-gradient(135deg, #e2c68a, #d8b877); }
   .update-link.visible {
     display: inline-flex;
     animation: update-blink 0.4s ease-in-out 5;
@@ -140,12 +142,12 @@
   .report-form-actions { display: flex; gap: 8px; margin-top: 6px; }
   .report-form-actions .amber-btn { flex: 1; }
   .amber-btn {
-    flex: 1; background: #ffb700; border: none; color: #2a2020;
+    flex: 1; background: #c9a15f; border: none; color: #1c3a2f;
     padding: 10px 8px; border-radius: 12px; font-size: 12px; font-weight: 700;
     cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     transition: background 0.12s ease, transform 0.06s ease;
   }
-  .amber-btn:hover { background: #ffc633; }
+  .amber-btn:hover { background: #d8b877; }
   .amber-btn:active { transform: scale(0.98); }
 
   .field { margin-bottom: 11px; }
@@ -165,18 +167,18 @@
     background-repeat: no-repeat; background-position: right 10px center;
     padding-right: 28px;
   }
-  .field input[readonly] { color: var(--text-dim); background: #f2ecee; }
+  .field input[readonly] { color: var(--text-dim); background: #ece4d2; }
   .chip-group {
     display: flex; flex-wrap: wrap; gap: 6px;
     background: var(--surface); border-radius: 9px; padding: 8px;
     box-shadow: 0 1px 2px rgba(0,0,0,0.1);
   }
   .chip {
-    background: #f0e8ea; border: none; border-radius: 14px;
+    background: #ece4d2; border: none; border-radius: 14px;
     padding: 5px 11px; font-size: 11.5px; color: var(--text);
     cursor: pointer; font-family: inherit;
   }
-  .chip.selected { background: #e3b23c; color: #2a2020; font-weight: 700; }
+  .chip.selected { background: #c9a15f; color: #1c3a2f; font-weight: 700; }
   .field textarea:focus, .field input:focus, .field select:focus {
     outline: 2px solid rgba(255,255,255,0.6); outline-offset: 1px;
   }
@@ -284,7 +286,7 @@
     font-size: 11px; font-weight: 700; padding: 5px 11px; border-radius: 999px;
     cursor: pointer; -webkit-app-region: no-drag;
   }
-  .wc-filter-btn.active { background: #ffb700; color: #2a2020; }
+  .wc-filter-btn.active { background: #c9a15f; color: #1c3a2f; }
   .wc-filter-toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   .wc-filter-toggle-btn {
     background: none; border: none; color: var(--on-brand-dim); font-size: 11.5px;
@@ -314,11 +316,11 @@
   .richtext-wrap { background: var(--surface); border-radius: 9px; padding: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
   .richtext-toolbar { display: flex; gap: 4px; margin-bottom: 5px; }
   .richtext-btn {
-    background: #f0e8ea; border: none; border-radius: 6px; padding: 4px 9px;
+    background: #ece4d2; border: none; border-radius: 6px; padding: 4px 9px;
     font-size: 12px; font-weight: 700; color: var(--text); cursor: pointer;
     font-family: inherit;
   }
-  .richtext-btn:hover { background: #e3d5d9; }
+  .richtext-btn:hover { background: #e6dcc3; }
   .richtext-wrap textarea {
     width: 100%; background: transparent; border: none; color: var(--text);
     padding: 4px; font-size: 13px; font-family: inherit; resize: vertical;
@@ -343,16 +345,16 @@
   .url-list-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
   .url-list-row input { flex: 1; margin: 0; }
   .url-remove-btn {
-    background: #f0e8ea; border: none; border-radius: 6px; width: 26px; height: 26px;
+    background: #ece4d2; border: none; border-radius: 6px; width: 26px; height: 26px;
     font-size: 12px; color: var(--text); cursor: pointer; flex-shrink: 0;
   }
-  .url-remove-btn:hover { background: #e3d5d9; }
+  .url-remove-btn:hover { background: #e6dcc3; }
   .url-add-btn {
-    background: #f0e8ea; border: none; border-radius: 6px; padding: 4px 9px;
+    background: #ece4d2; border: none; border-radius: 6px; padding: 4px 9px;
     font-size: 12px; font-weight: 700; color: var(--text); cursor: pointer;
     font-family: inherit;
   }
-  .url-add-btn:hover { background: #e3d5d9; }
+  .url-add-btn:hover { background: #e6dcc3; }
 
   .hidden { display: none !important; }
 </style>
@@ -1015,10 +1017,14 @@
         els.main.appendChild(btn);
       });
 
-      // Match the tallest "menu" screen (~253px of actual content) so
-      // this landing screen — often just 1-2 category cards — doesn't
-      // render visibly smaller.
-      els.main.style.minHeight = '255px';
+      // Size to actual content, same as every other screen — a fixed
+      // floor here used to force this box to a hand-picked height (chosen
+      // to match whatever the "tallest" menu screen looked like at the
+      // time) even when there were only 1-2 categories, which just added
+      // dead space instead of adapting. The ResizeObserver at the bottom
+      // of this file already keeps the real OS window fit to content, so
+      // there's nothing this floor was protecting against.
+      els.main.style.minHeight = '';
     } catch (err) {
       showError(err.message || String(err), showCategoryPicker);
     }
@@ -1053,7 +1059,7 @@
       ? 'What are you logging status for?'
       : `${group.name} — choose an option`;
     els.footer.classList.add('hidden');
-    els.main.style.minHeight = '255px'; // same target as showCategoryPicker — see the comment on `main` in <style> above
+    els.main.style.minHeight = ''; // size to content — see the comment in showCategoryPicker() above
     els.main.innerHTML = '';
 
     group.tabs.forEach((tab) => {

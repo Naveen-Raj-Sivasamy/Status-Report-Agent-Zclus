@@ -462,6 +462,14 @@
   // rows there, which is exactly the signal used to skip the category
   // picker screen and show one flat tab list instead.
   let liveCategories = {};
+  // {tab: 'Excel'} for tabs that route their new entries to a Power
+  // Automate flow instead of this Sheet — see _DataSources in Code.gs.
+  // Any tab not listed here is a plain Google Sheet tab (the default,
+  // and everything before this existed). Only ever used to decide
+  // whether a tab click opens the existing-entries list (Google Sheet
+  // tabs) or skips straight to the add-entry form (Excel tabs can't be
+  // read back yet — see showTabPicker below).
+  let liveDataSourceTypes = {};
 
   // A save that needed a retry used to just sit there saying "Saving..."
   // for up to ~4.5 minutes with zero feedback, which looked identically
@@ -1103,9 +1111,12 @@
       btn.textContent = tab;
       // Weekly Connect keeps going straight to its own add-a-ticket form
       // (with the "View & update tickets →" link to its specialized
-      // status/priority list) — every other tab opens the generic
-      // existing-entries list first instead of a blank form.
-      btn.onclick = () => (tab === WEEKLY_CONNECT_TAB ? showForm(tab) : showTabEntries(tab));
+      // status/priority list). A tab routed to Excel (see
+      // liveDataSourceTypes/_DataSources) can't be read back yet either —
+      // only new entries go through, so it also skips straight to the
+      // form. Every other tab opens the generic existing-entries list.
+      const skipEntriesList = tab === WEEKLY_CONNECT_TAB || liveDataSourceTypes[tab] === 'Excel';
+      btn.onclick = () => (skipEntriesList ? showForm(tab) : showTabEntries(tab));
       els.main.appendChild(btn);
     });
 
@@ -1448,12 +1459,13 @@
       // yet — every fresh form starts clean, no exceptions.
       els.submitBtn.disabled = false;
       els.submitBtn.textContent = 'Submit';
-      // Weekly Connect has no existing-entries list to return to (see
-      // showTabPicker's onclick above) — Back there still means the tab
-      // list. Every other tab's "Add New" form was opened FROM its
-      // entries list, so Cancel should land back there, not skip past it
-      // to the tab list two screens up.
-      els.cancelBtn.onclick = () => (tab === WEEKLY_CONNECT_TAB ? showTabPicker() : showTabEntries(tab));
+      // Weekly Connect and any Excel-routed tab have no existing-entries
+      // list to return to (see showTabPicker's onclick above) — Cancel
+      // there still means the tab list. Every other tab's "Add New" form
+      // was opened FROM its entries list, so Cancel should land back
+      // there, not skip past it to the tab list two screens up.
+      const noEntriesList = tab === WEEKLY_CONNECT_TAB || liveDataSourceTypes[tab] === 'Excel';
+      els.cancelBtn.onclick = () => (noEntriesList ? showTabPicker() : showTabEntries(tab));
       els.submitBtn.onclick = async () => {
         els.submitBtn.disabled = true;
         els.submitBtn.textContent = 'Saving…';
@@ -2356,10 +2368,19 @@
     });
   }
 
+  function refreshLiveDataSourceTypes() {
+    window.statusApp.getDataSourceTypes().then((res) => {
+      liveDataSourceTypes = (res && res.dataSources) || {};
+    }).catch(() => {
+      /* best-effort — an Excel tab just gets treated as a plain Sheet tab until this loads */
+    });
+  }
+
   window.statusApp.onOpened(async () => {
     yourName = await window.statusApp.getYourName();
     refreshLiveOptions();
     refreshLiveFieldSchema();
+    refreshLiveDataSourceTypes();
     // Version gate first, every time the popup opens — an update that
     // finished downloading (or shipped) while this was closed should
     // block before anything else, same reasoning as checkLoginGate.
@@ -2373,6 +2394,7 @@
   window.statusApp.getYourName().then((n) => (yourName = n));
   refreshLiveOptions();
   refreshLiveFieldSchema();
+  refreshLiveDataSourceTypes();
   checkForcedUpdateGate().then((gated) => {
     if (gated) return;
     checkLoginGate().then((loginGated) => { if (!loginGated) showCategoryPicker(); });
@@ -2383,6 +2405,13 @@
   // (a few tabs) or clips a tall one (report options with a big date
   // picker). Fires on every render automatically, no need to call it
   // from each show*() function by hand.
+  //
+  // A manual corner/edge-resize override used to live here too — reverted
+  // (2026-09): it flickered and snapped back to the default size/position
+  // right after a drag. Root cause was a stale ResizeObserver timer
+  // (scheduled before the drag was detected) that fired unconditionally
+  // and re-triggered an auto-fit resize mid-drag, fighting the manual
+  // size the user had just set. Plain auto-fit-to-content again.
   const cardEl = document.getElementById('card');
   let resizeTimer = null;
   new ResizeObserver(() => {

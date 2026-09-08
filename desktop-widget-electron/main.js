@@ -333,6 +333,7 @@ let columnsCache = {}; // tab -> columns[]
 let optionsCache = null; // dropdown/multiselect option lists from the _Options tab
 let fieldSchemaCache = null; // which fields get which widget type, from the _FieldSchema tab
 let categoriesCache = offlineCache.categoriesCache || null; // landing-screen tab grouping, from the _Categories tab
+let dataSourceTypesCache = null; // {tab: 'Excel'} for non-default tabs only — see _DataSources in Code.gs
 
 async function refreshTabsCache() {
   try {
@@ -391,6 +392,17 @@ async function refreshCategoriesCache() {
   }
 }
 
+async function refreshDataSourceTypesCache() {
+  try {
+    const data = await apiGet({ action: 'dataSources' });
+    dataSourceTypesCache = data;
+    return data;
+  } catch (err) {
+    if (dataSourceTypesCache) return dataSourceTypesCache; // stale is better than nothing
+    throw err;
+  }
+}
+
 function prefetchAll() {
   refreshTabsCache()
     .then((data) => Promise.all((data.tabs || []).map((t) => refreshColumnsCache(t))))
@@ -404,6 +416,9 @@ function prefetchAll() {
     /* same */
   });
   refreshCategoriesCache().catch(() => {
+    /* same */
+  });
+  refreshDataSourceTypesCache().catch(() => {
     /* same */
   });
 }
@@ -442,6 +457,24 @@ ipcMain.handle('get-categories', async () => {
     return categoriesCache;
   }
   return refreshCategoriesCache();
+});
+ipcMain.handle('get-data-source-types', async () => {
+  if (dataSourceTypesCache) {
+    refreshDataSourceTypesCache();
+    return dataSourceTypesCache;
+  }
+  return refreshDataSourceTypesCache();
+});
+// Admin-only, full detail (webhook URLs included) — the Manage screen's
+// Data Sources editor. Separate from the lightweight get-data-source-types
+// above the same way getConnectGroups/get-connect-groups already is:
+// this always hits the backend fresh, no in-memory cache, since it's only
+// opened rarely and needs to reflect exactly what's saved right now.
+ipcMain.handle('get-data-sources', async () => apiPostBody({ action: 'getDataSources' }));
+ipcMain.handle('save-data-sources', async (_e, dataSources) => {
+  const result = await apiPostBody({ action: 'saveDataSources', dataSources });
+  dataSourceTypesCache = null; // saved data may have just changed which tabs are Excel-routed
+  return result;
 });
 // Real risk this closes: when a save is genuinely slow (e.g. a large
 // sheet's dependent formulas recalculating on every write — the
@@ -776,27 +809,14 @@ ipcMain.handle('hide-window', () => hidePopup());
 // renderer measures its own content and asks us to resize to fit, on
 // every render. Clamped so it can never grow absurdly tall or shrink to
 // nothing; content beyond the max just scrolls (main already does that).
-const DEFAULT_POPUP_WIDTH = 456; // 380 +20% — same value createPopup() opens with
 const MIN_POPUP_HEIGHT = 317; // 264 +20%
 const MAX_POPUP_HEIGHT = 922; // 768 +20%
-// Set right before every one of OUR OWN popup.setSize() calls — see
-// popup.on('resize', ...) in createPopup() below, which uses this to
-// tell "we just auto-fit it" apart from "the user actually dragged a
-// corner/edge just now". Electron fires the same 'resize' event either
-// way; a short grace window after our own last resize is the practical
-// way to tell them apart, since there's no built-in flag for it.
-let lastProgrammaticPopupResizeAt = 0;
 ipcMain.on('resize-window', (_e, height) => {
   if (!popup) return;
   const clamped = Math.max(MIN_POPUP_HEIGHT, Math.min(MAX_POPUP_HEIGHT, Math.round(height)));
-  const [currentWidth, currentHeight] = popup.getSize();
-  // Always snaps width back to the default too, not just height — this is
-  // the "auto-fit" the manual corner-resize override (see index.html)
-  // snaps back to on the next screen, and auto-fit has only ever meant a
-  // fixed width with a content-fit height, never a remembered width.
-  if (clamped === currentHeight && currentWidth === DEFAULT_POPUP_WIDTH) return;
-  lastProgrammaticPopupResizeAt = Date.now();
-  popup.setSize(DEFAULT_POPUP_WIDTH, clamped);
+  const [width, currentHeight] = popup.getSize();
+  if (clamped === currentHeight) return;
+  popup.setSize(width, clamped);
   if (popup.isVisible()) {
     const refBounds = floatBtn ? floatBtn.getBounds() : tray.getBounds();
     positionPopupNearWindow(refBounds);
@@ -1110,18 +1130,16 @@ function createPopup() {
     height: 605, // 504 +20% — corrected to fit real content right after first paint — see resize-window
     show: false,
     frame: false,
-    // Was hard-blocked to keep this purely auto-fit-to-content. Now a
-    // manual override on TOP of that: Electron gives frameless windows a
-    // real OS-level resize border/corner even with no visible chrome, so
-    // this alone is enough to let someone drag it bigger or smaller —
-    // see the 'resize' listener below for how that's told apart from our
-    // own auto-fit calls, and index.html's manualResizeActive for the
-    // renderer side of the same override.
-    resizable: true,
-    minWidth: 340,
-    minHeight: MIN_POPUP_HEIGHT,
-    maxWidth: 700,
-    maxHeight: MAX_POPUP_HEIGHT,
+    // Tried a manual corner/edge-resize override on top of auto-fit —
+    // reverted (2026-09): a frameless + transparent BrowserWindow on
+    // Windows fires native 'resize' events in a way that's genuinely
+    // ambiguous to tell apart from our own auto-fit setSize() calls, and
+    // the heuristic used here (a time-based grace window) had a real race
+    // — a resize-to-fit already scheduled just before a drag started
+    // could still fire mid-drag and snap the window straight back to its
+    // default size/position. Purely auto-fit-to-content again, like
+    // before that attempt.
+    resizable: false,
     fullscreenable: false,
     skipTaskbar: true,
     backgroundColor: '#00000000',
@@ -1138,10 +1156,6 @@ function createPopup() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   // Deliberately no hide-on-blur: closing is only via the ✕ button, so
   // switching to another app to look something up doesn't lose your form.
-  win.on('resize', () => {
-    if (Date.now() - lastProgrammaticPopupResizeAt < 250) return; // that was us, not a real drag
-    if (!win.webContents.isDestroyed()) win.webContents.send('window-manually-resized');
-  });
   return win;
 }
 

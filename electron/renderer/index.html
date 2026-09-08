@@ -1,0 +1,2138 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Report Generator</title>
+<style>
+  :root {
+    --brand: #6e1b2c;
+    --brand-hover: #872236;
+    --surface: #ffffff;
+    --surface-hover: #f4eef0;
+    --border: #e7dade;
+    --text: #2a2020;
+    --text-dim: #7a6a6d;
+    --on-brand: #ffffff;
+    --on-brand-dim: #e8c9cf;
+    --danger: #c0392b;
+    --success: #2e8b57;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: transparent;
+    user-select: none;
+  }
+  #card {
+    /* No fixed/percentage height: this element must size itself to its
+       actual content so scrollHeight reports a true value — the JS at
+       the bottom of this file reads that and resizes the real OS window
+       to match. (A percentage height here would make scrollHeight just
+       echo back whatever the window's current size already is.) */
+    display: flex;
+    flex-direction: column;
+    background: var(--brand);
+    border: 1px solid rgba(0,0,0,0.25);
+    border-radius: 16px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+    overflow: hidden;
+  }
+  header {
+    padding: 16px 16px 12px;
+    display: flex; align-items: flex-start; justify-content: space-between;
+    -webkit-app-region: drag; /* drag the whole popup by its header, like the floating icon */
+  }
+  header h1 {
+    font-size: 15px; font-weight: 700; color: var(--on-brand); margin: 0;
+    letter-spacing: 0.2px;
+  }
+  header .sub { font-size: 11px; color: var(--on-brand-dim); margin-top: 3px; font-weight: 600; }
+  .header-actions { display: flex; gap: 6px; }
+  .icon-btn {
+    background: rgba(255,255,255,0.14); border: none; color: var(--on-brand);
+    font-size: 12px; cursor: pointer; padding: 5px 9px; border-radius: 7px;
+    -webkit-app-region: no-drag; /* stay clickable inside the draggable header */
+  }
+  .icon-btn:hover { background: rgba(255,255,255,0.24); }
+
+  /* min-height isn't set here — it's toggled via JS (main.style.minHeight)
+     only on the category landing screen and a category's tab list, so
+     those two "menu" screens stay a consistent size as you move between
+     them instead of the popup visibly shrinking for a short list (e.g.
+     Team Management's single "Leave" button) and growing again for a
+     longer one. Every other screen (forms, Settings, Report Options,
+     loading/error/result) explicitly clears it back to auto-height. */
+  main { overflow-y: auto; padding: 6px 16px 12px; max-height: 605px; } /* cap: 504 +20% */
+
+  .tab-btn {
+    width: 100%; text-align: left;
+    background: var(--surface);
+    border: none;
+    color: var(--text);
+    padding: 13px 14px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 9px;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    transition: background 0.12s ease, transform 0.06s ease;
+  }
+  .tab-btn:hover { background: var(--surface-hover); }
+  .tab-btn:active { transform: scale(0.98); }
+
+  /* The top-level category menu (Report Generator / Team
+     Management / ...) — deliberately bigger than a plain .tab-btn, not
+     just for looks: with only 1-2 options on that first screen, the
+     popup must not visibly shrink compared to every screen after it. A
+     title + a preview of what's inside earns that extra height honestly
+     instead of padding it out artificially. */
+  .category-btn {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+    width: 100%; text-align: left;
+    background: var(--surface);
+    border: none;
+    color: var(--text);
+    padding: 20px 18px;
+    border-radius: 14px;
+    margin-bottom: 11px;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    transition: background 0.12s ease, transform 0.06s ease;
+  }
+  .category-btn:hover { background: var(--surface-hover); }
+  .category-btn:active { transform: scale(0.98); }
+  .category-btn .category-title { font-size: 14.5px; font-weight: 700; }
+  .category-btn .category-sub { font-size: 11px; color: var(--text-dim); font-weight: 500; }
+
+  /* Persistent bar pinned below the (scrollable) tab list — outside `main`,
+     so it never shifts up/down as tabs are added or removed. margin-top is
+     the deliberate visible gap between the tab list and these two CTAs
+     (as opposed to padding-top, which would sit *inside* the border-top
+     line below and just tighten the divider instead of separating it from
+     the tab list above). */
+  .report-actions { display: flex; gap: 8px; margin-top: 24px; padding: 8px 16px 12px; border-top: 1px solid rgba(255,255,255,0.14); }
+  .version-badge {
+    font-size: 9px; font-weight: 700; color: var(--on-brand-dim);
+    background: rgba(255,255,255,0.16); padding: 2px 6px; border-radius: 8px;
+    vertical-align: middle; margin-left: 4px;
+  }
+  .update-link {
+    display: none; align-items: center; gap: 4px;
+    background: linear-gradient(135deg, #ffe08a, #ffb700);
+    color: #2a2020; font-size: 10.5px; font-weight: 800;
+    border: none; border-radius: 999px; padding: 5px 10px;
+    cursor: pointer; -webkit-app-region: no-drag;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+  }
+  .update-link::before { content: "\2728"; font-size: 10px; }
+  .update-link:hover { background: linear-gradient(135deg, #ffe9a8, #ffc633); }
+  .update-link.visible {
+    display: inline-flex;
+    animation: update-blink 0.4s ease-in-out 5;
+  }
+  @keyframes update-blink {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.94); }
+  }
+
+  .report-form-actions { display: flex; gap: 8px; margin-top: 6px; }
+  .report-form-actions .amber-btn { flex: 1; }
+  .amber-btn {
+    flex: 1; background: #ffb700; border: none; color: #2a2020;
+    padding: 10px 8px; border-radius: 12px; font-size: 12px; font-weight: 700;
+    cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: background 0.12s ease, transform 0.06s ease;
+  }
+  .amber-btn:hover { background: #ffc633; }
+  .amber-btn:active { transform: scale(0.98); }
+
+  .field { margin-bottom: 11px; }
+  .field label {
+    display: block; font-size: 10.5px; color: var(--on-brand-dim);
+    margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;
+    font-weight: 700;
+  }
+  .field textarea, .field input, .field select {
+    width: 100%; background: var(--surface); border: none;
+    border-radius: 9px; color: var(--text); padding: 9px 10px; font-size: 13px;
+    font-family: inherit; resize: vertical; min-height: 34px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  }
+  .field select { appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%237a6a6d'/></svg>");
+    background-repeat: no-repeat; background-position: right 10px center;
+    padding-right: 28px;
+  }
+  .field input[readonly] { color: var(--text-dim); background: #f2ecee; }
+  .chip-group {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    background: var(--surface); border-radius: 9px; padding: 8px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  }
+  .chip {
+    background: #f0e8ea; border: none; border-radius: 14px;
+    padding: 5px 11px; font-size: 11.5px; color: var(--text);
+    cursor: pointer; font-family: inherit;
+  }
+  .chip.selected { background: #e3b23c; color: #2a2020; font-weight: 700; }
+  .field textarea:focus, .field input:focus, .field select:focus {
+    outline: 2px solid rgba(255,255,255,0.6); outline-offset: 1px;
+  }
+  .login-hint { margin: 0 0 12px; font-size: 12px; color: var(--on-brand-dim); line-height: 1.4; }
+  .login-err { min-height: 15px; font-size: 11px; color: #ffb4b4; font-weight: 600; margin: -3px 0 8px; word-break: break-word; }
+
+  footer.form-actions {
+    padding: 4px 16px 4px; display: flex; gap: 8px; justify-content: flex-end;
+  }
+  button.primary, button.secondary {
+    border: none; border-radius: 9px; padding: 9px 16px;
+    font-size: 12.5px; font-weight: 700; cursor: pointer;
+  }
+  button.primary { background: var(--surface); color: var(--brand); }
+  button.primary:hover { background: var(--surface-hover); }
+  button.primary:disabled { opacity: 0.6; cursor: default; }
+  button.secondary { background: transparent; color: var(--on-brand-dim); }
+  button.secondary:hover { color: var(--on-brand); }
+
+  #status-view {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 12px; padding: 20px; text-align: center;
+  }
+  #status-view .icon { font-size: 30px; }
+  #status-view .msg { font-size: 13px; color: var(--on-brand); font-weight: 600; }
+  #status-view .err { font-size: 11px; color: var(--on-brand-dim); font-weight: 600; word-break: break-word; }
+  .spinner {
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,0.3); border-top-color: var(--on-brand);
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .result-view { position: relative; overflow: visible; }
+  .result-badge {
+    width: 88px; height: 88px; border-radius: 50%; display: flex;
+    align-items: center; justify-content: center; font-size: 46px; font-weight: 800;
+    animation: pop-in 0.5s cubic-bezier(.34,1.56,.64,1);
+  }
+  .result-badge.success { background: rgba(107, 240, 160, 0.18); color: #6bf0a0; }
+  .result-badge.fail { background: rgba(255, 120, 120, 0.18); color: #ff8a8a; }
+  @keyframes pop-in {
+    0% { transform: scale(0); opacity: 0; }
+    60% { transform: scale(1.18); opacity: 1; }
+    100% { transform: scale(1); }
+  }
+  .result-title { font-size: 17px; font-weight: 800; color: var(--on-brand); }
+  .result-sub { font-size: 12px; color: var(--on-brand-dim); font-weight: 600; max-width: 280px; word-break: break-word; }
+  .confetti-piece {
+    position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; border-radius: 2px;
+    opacity: 0; pointer-events: none;
+    animation: confetti-burst 950ms ease-out forwards;
+  }
+  @keyframes confetti-burst {
+    0% { transform: translate(-50%, -50%) rotate(0deg) scale(0.6); opacity: 1; }
+    100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)) scale(1); opacity: 0; }
+  }
+
+  .credit {
+    text-align: center; font-size: 9.5px; color: var(--on-brand-dim);
+    padding: 6px 0 10px; opacity: 0.9; font-weight: 700;
+  }
+  .credit-link { color: inherit; text-decoration: underline; cursor: pointer; }
+  .credit-link:hover { color: #ffffff; }
+
+  /* ---- Weekly Connect: "View & update tickets" list + edit screen ---- */
+  .wc-open-link {
+    display: block; width: 100%; text-align: left; background: rgba(255,255,255,0.08);
+    border: none; border-radius: 10px; padding: 9px 12px; margin-bottom: 12px;
+    color: var(--on-brand); font-size: 12px; font-weight: 700; cursor: pointer;
+    -webkit-app-region: no-drag;
+  }
+  .wc-open-link:hover { background: rgba(255,255,255,0.16); }
+  .wc-ticket-btn {
+    width: 100%; text-align: left; background: var(--surface); border: none;
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 9px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 5px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12); font-family: inherit;
+  }
+  .wc-ticket-btn:hover { background: var(--surface-hover); }
+  .wc-ticket-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .wc-ticket-id { font-size: 11px; font-weight: 800; color: var(--text-dim); flex: 0 0 auto; }
+  .wc-ticket-issue {
+    font-size: 13px; font-weight: 600; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .wc-ticket-meta { font-size: 11px; color: var(--text-dim); }
+  .wc-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+  .badge {
+    font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap;
+  }
+  .badge.status-open { background: #fdecc8; color: #8a5a1e; }
+  .badge.status-in-progress { background: #d9e8fb; color: #1e4e8a; }
+  .badge.status-resolved { background: #d9f3e3; color: #1e6b3e; }
+  .badge.status-deferred { background: #ece5e6; color: #6b5a56; }
+  .badge.priority-urgent, .badge.priority-high { background: #fbdada; color: #a13a3a; }
+  .badge.priority-medium { background: #fdecc8; color: #8a5a1e; }
+  .badge.priority-low { background: #ece5e6; color: #6b5a56; }
+  .badge.stale { background: #a13a3a; color: #ffffff; }
+  .wc-empty { text-align: center; color: var(--on-brand-dim); font-size: 12px; padding: 24px 0; }
+  .wc-filter-row { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .wc-filter-btn {
+    background: rgba(255,255,255,0.08); border: none; color: var(--on-brand-dim);
+    font-size: 11px; font-weight: 700; padding: 5px 11px; border-radius: 999px;
+    cursor: pointer; -webkit-app-region: no-drag;
+  }
+  .wc-filter-btn.active { background: #ffb700; color: #2a2020; }
+  .wc-filter-toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .wc-filter-toggle-btn {
+    background: none; border: none; color: var(--on-brand-dim); font-size: 11.5px;
+    font-weight: 700; padding: 2px 0; cursor: pointer; -webkit-app-region: no-drag;
+  }
+  .wc-filter-toggle-btn:hover { color: var(--on-brand); }
+  .wc-filter-clear-btn {
+    background: none; border: none; color: var(--on-brand-dim); font-size: 10.5px;
+    font-weight: 700; text-decoration: underline; cursor: pointer; -webkit-app-region: no-drag;
+  }
+  .wc-filter-panel {
+    background: rgba(255,255,255,0.06); border-radius: 10px; padding: 10px 10px 2px;
+    margin-bottom: 10px;
+  }
+  .wc-filter-panel .field:last-child { margin-bottom: 8px; }
+  .wc-date-row { display: flex; gap: 6px; }
+  .wc-date-row input { flex: 1; }
+  .wc-detail-issue { color: var(--on-brand); font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .wc-detail-meta { color: var(--on-brand-dim); font-size: 11.5px; margin-bottom: 14px; }
+  .wc-detail-meta a { color: inherit; }
+
+  /* richtext field — a formatting toolbar over a plain textarea (stores
+     Markdown, not HTML — see the comment in buildFieldInput()). Overrides
+     the generic .field textarea rule above (same specificity, wins on
+     source order) so the textarea blends into this wrapper instead of
+     getting its own separate surface/shadow. */
+  .richtext-wrap { background: var(--surface); border-radius: 9px; padding: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+  .richtext-toolbar { display: flex; gap: 4px; margin-bottom: 5px; }
+  .richtext-btn {
+    background: #f0e8ea; border: none; border-radius: 6px; padding: 4px 9px;
+    font-size: 12px; font-weight: 700; color: var(--text); cursor: pointer;
+    font-family: inherit;
+  }
+  .richtext-btn:hover { background: #e3d5d9; }
+  .richtext-wrap textarea {
+    width: 100%; background: transparent; border: none; color: var(--text);
+    padding: 4px; font-size: 13px; font-family: inherit; resize: vertical;
+    min-height: 70px; box-shadow: none;
+  }
+  .richtext-wrap textarea:focus { outline: none; }
+  .richtext-preview {
+    margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);
+    font-size: 12.5px; color: var(--text); line-height: 1.45; word-break: break-word;
+  }
+  .richtext-preview-empty { color: var(--text-dim); font-style: italic; }
+  .richtext-preview strong { font-weight: 800; }
+  .richtext-preview a { color: var(--brand); text-decoration: underline; }
+  .richtext-preview ul, .richtext-preview ol { margin: 4px 0; padding-left: 18px; }
+  .richtext-preview li { margin-bottom: 2px; }
+  .richtext-preview br:last-child { display: none; } /* trailing <br> from the last line — avoids a dangling blank line at the bottom */
+
+  /* url / attachment fields — a repeatable list of link inputs (each is a
+     plain .field-styled <input type="url">, see the ".field input" rule
+     above), used for both types since "attachment" here just means
+     "one or more SharePoint links", not an actual file upload. */
+  .url-list-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+  .url-list-row input { flex: 1; margin: 0; }
+  .url-remove-btn {
+    background: #f0e8ea; border: none; border-radius: 6px; width: 26px; height: 26px;
+    font-size: 12px; color: var(--text); cursor: pointer; flex-shrink: 0;
+  }
+  .url-remove-btn:hover { background: #e3d5d9; }
+  .url-add-btn {
+    background: #f0e8ea; border: none; border-radius: 6px; padding: 4px 9px;
+    font-size: 12px; font-weight: 700; color: var(--text); cursor: pointer;
+    font-family: inherit;
+  }
+  .url-add-btn:hover { background: #e3d5d9; }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <div id="card">
+    <header>
+      <div>
+        <h1>Report Generator <span class="version-badge" id="version-badge"></span></h1>
+        <div class="sub" id="header-sub">What are you logging status for?</div>
+      </div>
+      <div class="header-actions">
+        <button class="update-link" id="update-link" title="A newer version is available">Update available</button>
+        <button class="icon-btn" id="settings-btn" title="Settings">⚙</button>
+        <button class="icon-btn" id="close-btn" title="Close">✕</button>
+      </div>
+    </header>
+
+    <main id="main"></main>
+
+    <div class="report-actions hidden" id="report-actions">
+      <button class="amber-btn" id="view-report-btn">View Report</button>
+      <button class="amber-btn" id="submit-report-btn">Submit Report</button>
+    </div>
+
+    <footer class="form-actions hidden" id="footer">
+      <button class="secondary" id="cancel-btn">Cancel</button>
+      <button class="primary" id="submit-btn">Submit</button>
+    </footer>
+  </div>
+
+<script src="field-config.js"></script>
+<script src="footer.js"></script>
+<script>
+  const els = {
+    sub: document.getElementById('header-sub'),
+    main: document.getElementById('main'),
+    footer: document.getElementById('footer'),
+    submitBtn: document.getElementById('submit-btn'),
+    cancelBtn: document.getElementById('cancel-btn'),
+    closeBtn: document.getElementById('close-btn'),
+    reportActions: document.getElementById('report-actions'),
+    viewReportBtn: document.getElementById('view-report-btn'),
+    submitReportBtn: document.getElementById('submit-report-btn'),
+    versionBadge: document.getElementById('version-badge'),
+    updateLink: document.getElementById('update-link'),
+    settingsBtn: document.getElementById('settings-btn'),
+  };
+
+  // Matches WEEKLY_CONNECT_TAB_NAME in Code.gs — the one tab name this
+  // client needs to recognize by identity, since "View & update tickets"
+  // and the edit-in-place flow are specific to it, not generic behavior
+  // every tab gets.
+  const WEEKLY_CONNECT_TAB = 'Weekly_Connect';
+
+  let yourName = '';
+  // Dropdown/multiselect option lists from the _Options sheet tab, fetched
+  // once at launch (see the bottom of this file) and re-fetched after
+  // Settings -> "Refresh tabs & fields". buildFieldInput() resolves each
+  // field's optionsKey against this via resolveOptions() (field-config.js),
+  // which returns [] for any key the sheet doesn't define yet — there's no
+  // shipped default to fall back to, since every list is org-specific.
+  let liveOptions = {};
+  // Which (Tab, Column) fields get a dropdown/date/multiselect/etc., from
+  // the _FieldSchema sheet tab — see fieldSpecFor() (field-config.js). A
+  // (Tab, Column) with no entry here renders as a plain text box.
+  let liveFieldSchema = {};
+  // Landing-screen category grouping, from the _Categories sheet tab — see
+  // groupTabsIntoCategories() (field-config.js). Empty until an org adds
+  // rows there, which is exactly the signal used to skip the category
+  // picker screen and show one flat tab list instead.
+  let liveCategories = {};
+
+  // A save that needed a retry used to just sit there saying "Saving..."
+  // for up to ~4.5 minutes with zero feedback, which looked identically
+  // "stuck" to every user the instant the backend was slow even once.
+  // Surface what's actually happening instead. Registered once, globally
+  // (not inside showForm) since els.submitBtn is a stable, reused element —
+  // guarded on .disabled so a stray late event can't clobber unrelated text.
+  window.statusApp.onSubmitRetry(({ attempt, attempts }) => {
+    if (els.submitBtn && els.submitBtn.disabled) {
+      els.submitBtn.textContent = `Saving… (retry ${attempt}/${attempts})`;
+    }
+  });
+
+  // -------------------- draft auto-save --------------------
+  // Typing something into a form and then closing the popup (or Windows
+  // updating, or the app just crashing) used to lose it outright. Cache
+  // each tab's in-progress values as you type, restore them next time that
+  // tab's form opens, and clear the cache once a submission actually
+  // succeeds. localStorage here is scoped to this renderer and survives
+  // closing/reopening the popup — it's only ever cleared explicitly below.
+  const DRAFT_PREFIX = 'draft:';
+
+  function saveDraft(tab, values) {
+    try {
+      const nonEmpty = Object.fromEntries(Object.entries(values).filter(([, v]) => v));
+      if (Object.keys(nonEmpty).length) {
+        localStorage.setItem(DRAFT_PREFIX + tab, JSON.stringify(nonEmpty));
+      } else {
+        localStorage.removeItem(DRAFT_PREFIX + tab); // nothing worth keeping
+      }
+    } catch {
+      /* best-effort — a locked-down profile shouldn't break the form over this */
+    }
+  }
+
+  function loadDraft(tab) {
+    try {
+      return JSON.parse(localStorage.getItem(DRAFT_PREFIX + tab) || 'null') || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function clearDraft(tab) {
+    try {
+      localStorage.removeItem(DRAFT_PREFIX + tab);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  function debounce(fn, ms) {
+    let t = null;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), ms);
+    };
+  }
+
+  function showLoading(msg) {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
+    els.main.innerHTML = `
+      <div id="status-view">
+        <div class="spinner"></div>
+        <div class="msg">${msg}</div>
+      </div>`;
+  }
+
+  function showError(msg, retryFn) {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
+    els.main.innerHTML = `
+      <div id="status-view">
+        <div class="icon">⚠️</div>
+        <div class="msg">Couldn't reach the sheet</div>
+        <div class="err">${escapeHtml(msg)}</div>
+        <button class="primary" id="retry-btn" style="margin-top:6px;">Retry</button>
+      </div>`;
+    document.getElementById('retry-btn').onclick = retryFn;
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+
+  // Minimal, safe renderer for exactly the 4 things the richtext toolbar
+  // produces — not a general Markdown library (no dependency needed for
+  // just **bold**, - bullets, N. numbered, [text](url)). Escapes FIRST,
+  // then substitutes the real <strong>/<ul>/<a> tags on the already-safe
+  // text — a user typing a literal "<" can never become a real tag this
+  // way, and link hrefs are restricted to http(s)/mailto so this can't
+  // become a javascript: URI. Safe to feed into innerHTML.
+  function renderMarkdownLite(text) {
+    if (!text) return '';
+    let html = escapeHtml(text)
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+    let out = '';
+    let listType = null; // 'ul' | 'ol' | null — tracks an open <ul>/<ol> across consecutive list lines
+    const closeList = () => {
+      if (listType) { out += listType === 'ul' ? '</ul>' : '</ol>'; listType = null; }
+    };
+    html.split('\n').forEach((line) => {
+      const bullet = line.match(/^- (.*)$/);
+      const numbered = line.match(/^\d+\. (.*)$/);
+      if (bullet) {
+        if (listType !== 'ul') { closeList(); out += '<ul>'; listType = 'ul'; }
+        out += '<li>' + bullet[1] + '</li>';
+      } else if (numbered) {
+        if (listType !== 'ol') { closeList(); out += '<ol>'; listType = 'ol'; }
+        out += '<li>' + numbered[1] + '</li>';
+      } else {
+        closeList();
+        out += line + '<br>';
+      }
+    });
+    closeList();
+    return out;
+  }
+
+  // Plain-text approximation for the one place rendered HTML doesn't fit —
+  // the ticket list's single-line, ellipsis-truncated preview (a <ul>
+  // wants to expand vertically, which breaks that truncation). Just drops
+  // the syntax markers instead of rendering them.
+  function stripMarkdown(text) {
+    if (!text) return '';
+    return String(text)
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/^[-*]\s+/gm, '')
+      .replace(/^\d+\.\s+/gm, '')
+      .replace(/\n+/g, ' ');
+  }
+
+  function launchConfetti(container) {
+    const colors = ['#ffb700', '#ffffff', '#6bf0a0', '#ffd166', '#ff8fa3', '#8ecbff'];
+    for (let i = 0; i < 26; i++) {
+      const piece = document.createElement('div');
+      piece.className = 'confetti-piece';
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 70 + Math.random() * 70;
+      piece.style.setProperty('--tx', `${Math.cos(angle) * distance}px`);
+      piece.style.setProperty('--ty', `${Math.sin(angle) * distance - 20}px`);
+      piece.style.setProperty('--rot', `${Math.random() * 480 - 240}deg`);
+      piece.style.background = colors[i % colors.length];
+      piece.style.animationDelay = `${Math.random() * 140}ms`;
+      container.appendChild(piece);
+    }
+  }
+
+  // Big, unmistakable pass/fail screen — used for both status-entry saves
+  // and the weekly report send, so there's never any doubt about the outcome.
+  function showResult({ success, title, subtitle, doneLabel, onDone }) {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = '';
+    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
+    els.main.innerHTML = `
+      <div id="status-view" class="result-view">
+        <div class="result-badge ${success ? 'success' : 'fail'}">${success ? '✓' : '✕'}</div>
+        <div class="result-title">${escapeHtml(title)}</div>
+        ${subtitle ? `<div class="result-sub">${escapeHtml(subtitle)}</div>` : ''}
+        ${onDone ? `<button class="primary" id="result-done-btn" style="margin-top:4px;">${escapeHtml(doneLabel || 'Done')}</button>` : ''}
+      </div>`;
+    const view = document.getElementById('status-view');
+    if (success) launchConfetti(view);
+    if (onDone) document.getElementById('result-done-btn').onclick = onDone;
+  }
+
+  function showSuccess(tab) {
+    showResult({ success: true, title: 'Submitted Successfully!', subtitle: `Saved to "${tab}"` });
+    setTimeout(() => window.statusApp.hideWindow(), 1900);
+  }
+
+  // Range-type sub-fields for the report screen — each returns the HTML
+  // for whatever inputs that range type needs, keyed by the ids
+  // computeRangeFromOptions() reads back out.
+  function rangeSubFieldsHtml(type) {
+    const now = new Date();
+    const thisYear = now.getFullYear();
+    const yearOptions = (selected) => {
+      let opts = '';
+      for (let y = thisYear - 3; y <= thisYear + 1; y++) {
+        opts += `<option value="${y}" ${y === selected ? 'selected' : ''}>${y}</option>`;
+      }
+      return opts;
+    };
+
+    if (type === 'custom') {
+      return `
+        <div class="field"><label>From</label><input type="date" id="range-from" /></div>
+        <div class="field"><label>To</label><input type="date" id="range-to" /></div>`;
+    }
+    if (type === 'month') {
+      const cur = `${thisYear}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      return `<div class="field"><label>Month</label><input type="month" id="range-month" value="${cur}" /></div>`;
+    }
+    if (type === 'quarter') {
+      const curQ = Math.floor(now.getMonth() / 3) + 1;
+      return `
+        <div class="field"><label>Year</label><select id="range-year">${yearOptions(thisYear)}</select></div>
+        <div class="field"><label>Quarter</label>
+          <select id="range-quarter">
+            ${[1, 2, 3, 4].map((q) => `<option value="${q}" ${q === curQ ? 'selected' : ''}>Q${q}</option>`).join('')}
+          </select>
+        </div>`;
+    }
+    if (type === 'year') {
+      return `<div class="field"><label>Year</label><select id="range-year">${yearOptions(thisYear)}</select></div>`;
+    }
+    return ''; // 'week' — no extra inputs, backend defaults to the current work week
+  }
+
+  // Turns the current range-type + sub-field values into { start, end } Date
+  // objects, or null for "This Week" (the backend applies its own default).
+  // Throws a plain Error with a user-facing message if something's missing/invalid.
+  function computeRangeFromOptions() {
+    const type = document.getElementById('range-type').value;
+    if (type === 'week') return null;
+
+    if (type === 'custom') {
+      const from = document.getElementById('range-from').value;
+      const to = document.getElementById('range-to').value;
+      if (!from || !to) throw new Error('Pick both a From and To date.');
+      const start = new Date(`${from}T00:00:00`);
+      const end = new Date(`${to}T23:59:59`);
+      if (start > end) throw new Error('"From" date must be before "To" date.');
+      return { start, end };
+    }
+    if (type === 'month') {
+      const val = document.getElementById('range-month').value;
+      if (!val) throw new Error('Pick a month.');
+      const [y, m] = val.split('-').map(Number);
+      return { start: new Date(y, m - 1, 1, 0, 0, 0), end: new Date(y, m, 0, 23, 59, 59) };
+    }
+    if (type === 'quarter') {
+      const y = Number(document.getElementById('range-year').value);
+      const q = Number(document.getElementById('range-quarter').value);
+      const startMonth = (q - 1) * 3;
+      return { start: new Date(y, startMonth, 1, 0, 0, 0), end: new Date(y, startMonth + 3, 0, 23, 59, 59) };
+    }
+    if (type === 'year') {
+      const y = Number(document.getElementById('range-year').value);
+      return { start: new Date(y, 0, 1, 0, 0, 0), end: new Date(y, 11, 31, 23, 59, 59) };
+    }
+    return null;
+  }
+
+  async function showReportOptions() {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = 'Generate a report';
+    els.main.style.minHeight = '';
+    showLoading('Loading…');
+    // Which report configs exist decides whether a "Report" picker shows
+    // at all — an org with just the one report (still the common case)
+    // never sees an extra control for a choice they don't have; this
+    // only appears once there's genuinely more than one to pick between.
+    let configs = [];
+    try {
+      const res = await window.statusApp.getReportConfigs();
+      configs = (res && res.configs) || [];
+    } catch {
+      configs = []; // best-effort — the range/send flow below still works with no config selected, backend defaults to the first one
+    }
+
+    els.main.innerHTML = `
+      ${configs.length > 1 ? `
+        <div class="field">
+          <label>Report</label>
+          <select id="report-config-select">
+            ${configs.map((c) => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('')}
+          </select>
+        </div>` : ''}
+      <div class="field">
+        <label>Range</label>
+        <select id="range-type">
+          <option value="week">This Week</option>
+          <option value="custom">Custom Range</option>
+          <option value="month">Monthly</option>
+          <option value="quarter">Quarterly</option>
+          <option value="year">Yearly</option>
+        </select>
+      </div>
+      <div id="range-fields"></div>
+      <div class="report-form-actions">
+        <button class="amber-btn" id="email-report-btn">Email Report</button>
+        <button class="amber-btn" id="download-report-btn">Download</button>
+      </div>
+      <button class="secondary" id="report-back-btn" style="width:100%; margin-top:10px;">Back</button>
+    `;
+
+    const rangeFields = document.getElementById('range-fields');
+    const rangeType = document.getElementById('range-type');
+    const renderSubFields = () => { rangeFields.innerHTML = rangeSubFieldsHtml(rangeType.value); };
+    rangeType.onchange = renderSubFields;
+    renderSubFields();
+
+    // Single config (or none returned/set up yet) → undefined, which the
+    // backend already treats as "use the first/only one" — see
+    // getReportConfigByName_ in Code.gs.
+    const selectedConfigName = () => {
+      const select = document.getElementById('report-config-select');
+      return select ? select.value : undefined;
+    };
+
+    document.getElementById('report-back-btn').onclick = showTabPicker;
+
+    document.getElementById('email-report-btn').onclick = async () => {
+      let range;
+      try {
+        range = computeRangeFromOptions();
+      } catch (err) {
+        showError(err.message, showReportOptions);
+        return;
+      }
+      showLoading('Sending report…');
+      try {
+        await window.statusApp.sendReportNow(range, selectedConfigName());
+        showResult({
+          success: true,
+          title: 'Submitted Successfully!',
+          subtitle: "The report is on its way to everyone's inbox.",
+          doneLabel: 'Done',
+          onDone: showTabPicker,
+        });
+      } catch (err) {
+        showResult({
+          success: false,
+          title: 'Failed',
+          subtitle: err.message || String(err),
+          doneLabel: 'Try again',
+          onDone: showReportOptions,
+        });
+      }
+    };
+
+    document.getElementById('download-report-btn').onclick = async () => {
+      let range;
+      try {
+        range = computeRangeFromOptions();
+      } catch (err) {
+        showError(err.message, showReportOptions);
+        return;
+      }
+      showLoading('Preparing file…');
+      try {
+        const result = await window.statusApp.downloadReport(range, selectedConfigName());
+        if (result.canceled) {
+          showReportOptions(); // they backed out of the save dialog — no error, just go back
+          return;
+        }
+        showResult({
+          success: true,
+          title: 'Downloaded!',
+          subtitle: result.filePath,
+          doneLabel: 'Done',
+          onDone: showTabPicker,
+        });
+      } catch (err) {
+        showResult({
+          success: false,
+          title: 'Failed',
+          subtitle: err.message || String(err),
+          doneLabel: 'Try again',
+          onDone: showReportOptions,
+        });
+      }
+    };
+  }
+
+  // Each row is styled like a tab-picker entry so adding another setting
+  // later is just another button in this list — no new layout needed.
+  function showSettings() {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = 'Settings';
+    els.main.style.minHeight = ''; // see the comment on `main` in <style> above
+    els.main.innerHTML = `
+      <button class="tab-btn" id="clear-cache-btn">Refresh tabs &amp; fields (clear cache)</button>
+      <button class="tab-btn" id="manage-fields-btn">Manage fields &amp; options</button>
+      <button class="tab-btn" id="connection-settings-btn">Change organization connection</button>
+      <button class="tab-btn" id="about-btn">About</button>
+      <button class="secondary" id="settings-back-btn" style="width:100%; margin-top:10px;">Back</button>
+    `;
+
+    document.getElementById('settings-back-btn').onclick = showTabPicker;
+    document.getElementById('about-btn').onclick = () => showAbout();
+    // Opens the same password-gated Connect window used on first run —
+    // it handles its own password prompt/editing entirely on its own, so
+    // there's nothing further to do here once it's open.
+    document.getElementById('connection-settings-btn').onclick = () => window.statusApp.openConnectionSettings();
+    // Same idea, its own separate window (manage.html) — password-gated
+    // (same admin password), lets you add/edit/delete dropdown options,
+    // field types, and categories without ever opening the Sheet.
+    document.getElementById('manage-fields-btn').onclick = () => window.statusApp.openManageScreen();
+
+    document.getElementById('clear-cache-btn').onclick = async () => {
+      showLoading('Clearing cache…');
+      try {
+        await window.statusApp.clearCache();
+        refreshLiveOptions(); // also picks up any _Options edits, not just tabs/columns
+        refreshLiveFieldSchema(); // and any _FieldSchema edits
+        // liveCategories isn't refreshed here — it's re-fetched fresh every
+        // time showCategoryPicker() runs, which a "Back" from wherever
+        // onDone below lands will naturally reach.
+        showResult({
+          success: true,
+          title: 'Cache Cleared',
+          subtitle: 'Tabs and fields refresh from the sheet next time you open them.',
+          doneLabel: 'Done',
+          onDone: showTabPicker,
+        });
+      } catch (err) {
+        showResult({
+          success: false,
+          title: 'Failed',
+          subtitle: err.message || String(err),
+          doneLabel: 'Try again',
+          onDone: showSettings,
+        });
+      }
+    };
+  }
+
+  // Replaces the old permanent "Developed by" footer, which sat at the
+  // bottom of every single screen whether anyone cared or not — version
+  // and credit info now live in one place someone actually goes looking
+  // for it, instead of being shown unconditionally forever.
+  async function showAbout() {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = 'About';
+    els.main.style.minHeight = '';
+    showLoading('Loading…');
+    try {
+      const info = await window.statusApp.getAppInfo();
+      const firstUsed = new Date(info.firstLaunchDate);
+      const firstUsedLabel = isNaN(firstUsed.getTime()) ? 'Unknown' : firstUsed.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+      els.main.innerHTML = `
+        <div class="section" style="background:var(--surface); border-radius:12px; padding:16px; margin-bottom:10px;">
+          <div class="field-label" style="color:var(--text-dim);">Version</div>
+          <div style="font-size:14px; font-weight:700; color:var(--text); margin-bottom:12px;">v${escapeHtml(info.version)}</div>
+          <div class="field-label" style="color:var(--text-dim);">First used on this computer</div>
+          <div style="font-size:14px; font-weight:700; color:var(--text);">${escapeHtml(firstUsedLabel)}</div>
+        </div>
+        <p class="login-hint" style="text-align:center;">Developed by <a href="#" id="about-credit-link" style="color:inherit; text-decoration:underline; cursor:pointer;">Naveen Raj Sivasamy</a></p>
+        <button class="secondary" id="about-back-btn" style="width:100%; margin-top:8px;">Back</button>
+      `;
+      document.getElementById('about-credit-link').onclick = (e) => {
+        e.preventDefault();
+        window.statusApp.openExternal('https://www.linkedin.com/in/naveen-raj-sivasamy-603826196');
+      };
+      document.getElementById('about-back-btn').onclick = showSettings;
+    } catch (err) {
+      showError(err.message || String(err), showAbout);
+    }
+  }
+
+  // Which category's tab list is currently showing, if any — so the many
+  // existing "go back to the tab list" callbacks (Cancel on a form, retry
+  // after an error, Done after a submit, Back from Settings/Report
+  // Options) can all keep calling showTabPicker() with no arguments and
+  // land back on the right list, instead of every one of those needing to
+  // be rewritten to thread the category through by hand.
+  let currentCategory = null;
+
+  // Shown instead of the normal landing screen once an admin has created
+  // an account for this person (see checkLoginGate below) — until then,
+  // this never runs and nothing about the app changes for anyone. No
+  // "skip" button on purpose: an account only exists because an admin
+  // deliberately created one, so once it does, logging in is the point.
+  // Forgot-password/locked-out isn't handled here — that's an admin
+  // resetting it (resetUserPassword in Code.gs), not a self-service flow.
+  function showLoginGate(suggestedUsername) {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = 'Log in';
+    els.main.style.minHeight = '';
+    els.main.innerHTML = `
+      <p class="login-hint">Your admin has set up an account for you — log in once to continue. You won't be asked again on this computer.</p>
+      <div class="field"><label>Username</label><input id="login-username" /></div>
+      <div class="field"><label>Password</label><input id="login-password" type="password" /></div>
+      <div class="login-err" id="login-err"></div>
+      <button class="primary" id="login-submit-btn" style="width:100%;">Log in</button>
+    `;
+    const userEl = document.getElementById('login-username');
+    const passEl = document.getElementById('login-password');
+    const errEl = document.getElementById('login-err');
+    const btn = document.getElementById('login-submit-btn');
+    userEl.value = suggestedUsername || '';
+
+    async function attemptLogin() {
+      const username = userEl.value.trim();
+      const password = passEl.value;
+      if (!username || !password) {
+        errEl.textContent = 'Enter your username and password.';
+        return;
+      }
+      errEl.textContent = '';
+      btn.disabled = true;
+      btn.textContent = 'Logging in…';
+      let result;
+      try {
+        result = await window.statusApp.login(username, password);
+      } catch (err) {
+        result = { ok: false, error: err.message || String(err) };
+      }
+      btn.disabled = false;
+      btn.textContent = 'Log in';
+      if (!result || !result.ok) {
+        errEl.textContent = (result && result.error) || 'Login failed — please try again.';
+        return;
+      }
+      showCategoryPicker();
+    }
+
+    btn.onclick = attemptLogin;
+    passEl.onkeydown = (e) => { if (e.key === 'Enter') attemptLogin(); };
+    (suggestedUsername ? passEl : userEl).focus();
+  }
+
+  // Runs before every landing-screen render (both the popup's initial load
+  // and every subsequent open — see onOpened below). Best-effort: if the
+  // check itself fails (offline, backend hiccup), this falls through to
+  // the normal screen exactly like today rather than blocking someone's
+  // whole workflow over a status check that isn't the thing they opened
+  // the app to do.
+  async function checkLoginGate() {
+    try {
+      const status = await window.statusApp.getSessionStatus();
+      // accountExists: the per-person rollout (an admin created THIS
+      // name's account specifically). requireLogin: the later, global
+      // switch (_Config's RequireLogin) — once an admin turns that on,
+      // everyone gets gated regardless of whether their saved name
+      // happens to match an account, not just the ones that do.
+      if (status && !status.loggedIn && (status.accountExists || status.requireLogin)) {
+        showLoginGate(status.suggestedUsername);
+        return true;
+      }
+    } catch {
+      /* best-effort — fall through to the normal screen */
+    }
+    return false;
+  }
+
+  // The landing screen: one big button per category from the _Categories
+  // sheet tab (see groupTabsIntoCategories() in field-config.js), instead
+  // of a single flat list of every tab. An org that hasn't configured any
+  // categories at all gets no cards here — showTabPicker() below renders
+  // the flat list directly instead, same as this app's very first screen
+  // ever, before categories existed.
+  async function showCategoryPicker() {
+    currentCategory = null;
+    els.sub.textContent = 'What would you like to do?';
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    showLoading('Loading…');
+    try {
+      const [{ tabs }, categoriesRes] = await Promise.all([
+        window.statusApp.getTabs(),
+        window.statusApp.getCategories(),
+      ]);
+      liveCategories = (categoriesRes && categoriesRes.categories) || {};
+      const groups = groupTabsIntoCategories(tabs, liveCategories);
+
+      if (groups.length === 0) {
+        // Nothing configured on _Categories — skip this screen entirely.
+        showTabPicker({ name: null, tabs });
+        return;
+      }
+
+      els.main.innerHTML = '';
+      groups.forEach((group) => {
+        const btn = document.createElement('button');
+        btn.className = 'category-btn';
+        btn.innerHTML = `
+          <span class="category-title">${escapeHtml(group.name)}</span>
+          <span class="category-sub">${escapeHtml(group.tabs.join(', '))}</span>`;
+        btn.onclick = () => showTabPicker(group);
+        els.main.appendChild(btn);
+      });
+
+      // Size to actual content, same as every other screen — a fixed
+      // floor here used to force this box to a hand-picked height (chosen
+      // to match whatever the "tallest" menu screen looked like at the
+      // time) even when there were only 1-2 categories, which just added
+      // dead space instead of adapting. The ResizeObserver at the bottom
+      // of this file already keeps the real OS window fit to content, so
+      // there's nothing this floor was protecting against.
+      els.main.style.minHeight = '';
+    } catch (err) {
+      showError(err.message || String(err), showCategoryPicker);
+    }
+  }
+
+  // Lets footer.js's injected logo mark act as a "Home" button — see its
+  // own comment on window.__kcGoHome for why this is set per-page instead
+  // of footer.js hardcoding what "home" means.
+  window.__kcGoHome = showCategoryPicker;
+
+  // Renders one category's tab list — or, when `group.name` is `null`
+  // (no _Categories configured at all, see showCategoryPicker above), the
+  // full flat tab list with no "Back" button, since there's no category
+  // screen to go back to. `group` is only ever a real {name, tabs} object
+  // when called from showCategoryPicker's own click handler above (an
+  // arrow function, so it passes the real value) or its own flat-list
+  // fallback call — every other call site assigns this function straight
+  // to an `onclick`/`onDone`, which invokes it with the DOM event as the
+  // first argument instead. The typeof/Array.isArray check below is what
+  // tells those apart, so a bare `showTabPicker()` (or
+  // `showTabPicker(event)`) safely falls back to whichever tab list was
+  // already showing.
+  function showTabPicker(group) {
+    if (group && typeof group === 'object' && Array.isArray(group.tabs)) {
+      currentCategory = group;
+    }
+    group = currentCategory;
+    if (!group) return showCategoryPicker(); // nothing to go "back" to — land on the real start screen instead
+
+    const isFlat = group.name === null;
+    els.sub.textContent = isFlat
+      ? 'What are you logging status for?'
+      : `${group.name} — choose an option`;
+    els.footer.classList.add('hidden');
+    els.main.style.minHeight = ''; // size to content — see the comment in showCategoryPicker() above
+    els.main.innerHTML = '';
+
+    group.tabs.forEach((tab) => {
+      const btn = document.createElement('button');
+      btn.className = 'tab-btn';
+      btn.textContent = tab;
+      btn.onclick = () => showForm(tab);
+      els.main.appendChild(btn);
+    });
+
+    if (!isFlat) {
+      const backBtn = document.createElement('button');
+      backBtn.className = 'secondary';
+      backBtn.style.cssText = 'width:100%; margin-top:2px;';
+      backBtn.textContent = '← Back';
+      backBtn.onclick = showCategoryPicker;
+      els.main.appendChild(backBtn);
+    }
+
+    // View Report / Submit Report are available from every tab list —
+    // REPORT_TABS (the server side of this) decides which rows actually
+    // go into the compiled report regardless of which screen you clicked
+    // from, so there's no org-specific category name to match here.
+    els.reportActions.classList.remove('hidden');
+  }
+
+  function buildFieldInput(tab, col, presetValue) {
+    const spec = (typeof fieldSpecFor === 'function' && fieldSpecFor(tab, col, liveFieldSchema)) || null;
+
+    if (spec && spec.type === 'select') {
+      const select = document.createElement('select');
+      const blank = document.createElement('option');
+      blank.value = ''; blank.textContent = '— choose —';
+      select.appendChild(blank);
+      resolveOptions(spec.optionsKey, liveOptions).forEach((opt) => {
+        const o = document.createElement('option');
+        o.value = opt; o.textContent = opt;
+        select.appendChild(o);
+      });
+      if (presetValue) select.value = presetValue;
+      return select;
+    }
+
+    if (spec && spec.type === 'multiselect') {
+      const group = document.createElement('div');
+      group.className = 'chip-group';
+      const preselected = presetValue
+        ? presetValue.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+      const selected = new Set(preselected);
+      resolveOptions(spec.optionsKey, liveOptions).forEach((opt) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip';
+        chip.textContent = opt;
+        if (selected.has(opt)) chip.classList.add('selected');
+        chip.onclick = () => {
+          if (selected.has(opt)) { selected.delete(opt); chip.classList.remove('selected'); }
+          else { selected.add(opt); chip.classList.add('selected'); }
+        };
+        group.appendChild(chip);
+      });
+      // Give the group a value-like interface so submit collection works uniformly.
+      Object.defineProperty(group, 'value', {
+        get: () => Array.from(selected).join(', '),
+      });
+      return group;
+    }
+
+    if (spec && spec.type === 'richtext') {
+      // Stores lightweight Markdown (**bold**, - bullets, 1. numbered,
+      // [text](url)), not HTML — HTML would render as literal angle-
+      // bracket noise when read directly in the Sheet cell (the whole
+      // point of this app), and risks injection wherever the value gets
+      // shown elsewhere (Teams, a future report). Markdown stays readable
+      // as plain text even unrendered.
+      const wrap = document.createElement('div');
+      wrap.className = 'richtext-wrap';
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'richtext-toolbar';
+
+      const textarea = document.createElement('textarea');
+      textarea.rows = 4;
+      if (presetValue) textarea.value = presetValue;
+
+      const wrapSelection = (before, after) => {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const selected = textarea.value.slice(start, end);
+        textarea.focus();
+        textarea.setRangeText(before + selected + after, start, end, 'end');
+      };
+      const prefixLines = (makeLine) => {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const value = textarea.value;
+        const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+        const nextBreak = value.indexOf('\n', end);
+        const lineEnd = nextBreak === -1 ? value.length : nextBreak;
+        const block = value.slice(lineStart, lineEnd);
+        const newBlock = block.split('\n').map(makeLine).join('\n');
+        textarea.focus();
+        textarea.setRangeText(newBlock, lineStart, lineEnd, 'end');
+      };
+
+      const makeToolbarBtn = (label, title, onClick) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'richtext-btn';
+        btn.textContent = label;
+        btn.title = title;
+        btn.onclick = (e) => { e.preventDefault(); onClick(); };
+        return btn;
+      };
+      toolbar.appendChild(makeToolbarBtn('B', 'Bold', () => wrapSelection('**', '**')));
+      toolbar.appendChild(makeToolbarBtn('•', 'Bullet list', () =>
+        prefixLines((line) => (line.startsWith('- ') ? line : '- ' + line))
+      ));
+      toolbar.appendChild(makeToolbarBtn('1.', 'Numbered list', () =>
+        prefixLines((line, i) => (i + 1) + '. ' + line.replace(/^\d+\.\s*/, ''))
+      ));
+      toolbar.appendChild(makeToolbarBtn('🔗', 'Insert link', () => {
+        const url = window.prompt('Link URL:');
+        if (!url) return;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const label = textarea.value.slice(start, end) || 'link';
+        textarea.focus();
+        textarea.setRangeText('[' + label + '](' + url + ')', start, end, 'end');
+      }));
+
+      const preview = document.createElement('div');
+      preview.className = 'richtext-preview';
+      const syncPreview = () => {
+        preview.innerHTML = textarea.value.trim()
+          ? renderMarkdownLite(textarea.value)
+          : '<span class="richtext-preview-empty">Preview appears here as you type…</span>';
+      };
+      textarea.addEventListener('input', syncPreview);
+      syncPreview();
+
+      wrap.appendChild(toolbar);
+      wrap.appendChild(textarea);
+      wrap.appendChild(preview);
+      // Give the wrapper a value-like interface so submit/draft-save
+      // collection works uniformly — same trick the multiselect chip-group
+      // above uses, since this isn't a real form control itself.
+      Object.defineProperty(wrap, 'value', {
+        get: () => textarea.value,
+      });
+      return wrap;
+    }
+
+    if (spec && (spec.type === 'url' || spec.type === 'attachment')) {
+      // Same field for both — "attachment" here means "one or more
+      // SharePoint document links" rather than an actual file upload (this
+      // app writes plain cell values to the Sheet, not binary files), so
+      // it only differs from "url" in the placeholder/button text below.
+      // Multiple links are stored newline-separated in the one cell —
+      // chosen over comma-separated (what multiselect uses) since a URL's
+      // own query string can legitimately contain a comma.
+      const isAttachment = spec.type === 'attachment';
+      const wrap = document.createElement('div');
+      wrap.className = 'url-list-wrap';
+      const rowsWrap = document.createElement('div');
+      wrap.appendChild(rowsWrap);
+
+      const addRow = (value) => {
+        const row = document.createElement('div');
+        row.className = 'url-list-row';
+        const input = document.createElement('input');
+        input.type = 'url';
+        input.placeholder = isAttachment ? 'Paste a SharePoint document link' : 'https://…';
+        input.value = value || '';
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'url-remove-btn';
+        del.textContent = '✕';
+        del.title = 'Remove this link';
+        del.onclick = () => row.remove();
+        row.appendChild(input);
+        row.appendChild(del);
+        rowsWrap.appendChild(row);
+      };
+
+      const existing = presetValue
+        ? presetValue.split('\n').map((s) => s.trim()).filter(Boolean)
+        : [];
+      if (existing.length) existing.forEach(addRow);
+      else addRow('');
+
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'url-add-btn';
+      addBtn.textContent = isAttachment ? '+ Add another document' : '+ Add another link';
+      addBtn.onclick = () => addRow('');
+      wrap.appendChild(addBtn);
+
+      // Give the wrapper a value-like interface so submit/draft-save
+      // collection works uniformly — same trick multiselect/richtext/
+      // checkbox above use, since this isn't a real form control itself.
+      // The 'input' listener submit/draft-save attach to this element
+      // still fires: native input events bubble up from the nested
+      // <input>s to this wrapper.
+      Object.defineProperty(wrap, 'value', {
+        get: () =>
+          Array.from(rowsWrap.querySelectorAll('input'))
+            .map((i) => i.value.trim())
+            .filter(Boolean)
+            .join('\n'),
+      });
+      return wrap;
+    }
+
+    if (spec && spec.type === 'date') {
+      const input = document.createElement('input');
+      input.type = 'date';
+      if (presetValue) input.value = presetValue;
+      return input;
+    }
+
+    if (spec && spec.type === 'checkbox') {
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = presetValue === 'Yes';
+      // Real checkboxes report .value as the fixed string "on" regardless
+      // of checked state — override it so submit/draft-save (both just
+      // read el.value) get a plain "Yes"/"" like every other field type,
+      // same trick the multiselect chip-group uses below.
+      Object.defineProperty(input, 'value', {
+        get: () => (input.checked ? 'Yes' : ''),
+      });
+      return input;
+    }
+
+    if (spec && spec.type === 'week-auto') {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.readOnly = true;
+      input.placeholder = 'Auto-filled from Date';
+      return input;
+    }
+
+    if (spec && spec.type === 'sequence') {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.readOnly = true;
+      input.placeholder = 'Loading…';
+      return input;
+    }
+
+    const isLong = /notes|description|blocker|comment|detail/i.test(col);
+    const input = document.createElement(isLong ? 'textarea' : 'input');
+    if (isLong) input.rows = 2;
+    if (presetValue) input.value = presetValue;
+    else if (/name/i.test(col) && yourName) input.value = yourName;
+    return input;
+  }
+
+  async function showForm(tab) {
+    els.sub.textContent = tab;
+    showLoading('Loading fields…');
+    try {
+      const { columns } = await window.statusApp.getColumns(tab);
+      els.main.innerHTML = '';
+      const inputs = {};
+      const draft = loadDraft(tab);
+
+      if (tab === WEEKLY_CONNECT_TAB) {
+        const openLink = document.createElement('button');
+        openLink.type = 'button';
+        openLink.className = 'wc-open-link';
+        openLink.textContent = 'View & update tickets →';
+        openLink.onclick = () => showWeeklyConnectTickets();
+        els.main.appendChild(openLink);
+      }
+
+      columns.forEach((col) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'field';
+        const label = document.createElement('label');
+        label.textContent = col;
+        const input = buildFieldInput(tab, col, draft[col]);
+        wrap.appendChild(label);
+        wrap.appendChild(input);
+        els.main.appendChild(wrap);
+        inputs[col] = input;
+      });
+
+      // Keep the draft updated as they type/pick/toggle anything — 'input'
+      // covers text/textarea/date, 'change' covers <select>, and 'click'
+      // (bubbling up from a chip) covers multiselect chip-groups; readonly
+      // fields (week-auto, sequence) are recomputed fresh every time this
+      // form opens anyway, so there's nothing useful to persist for those.
+      const scheduleDraftSave = debounce(() => {
+        const values = {};
+        Object.entries(inputs).forEach(([k, el]) => (values[k] = (el.value || '').trim()));
+        saveDraft(tab, values);
+      }, 400);
+      Object.entries(inputs).forEach(([, el]) => {
+        if (el.readOnly) return;
+        const evt = el.tagName === 'SELECT' ? 'change' : el.classList.contains('chip-group') ? 'click' : 'input';
+        el.addEventListener(evt, scheduleDraftSave);
+      });
+
+      // Wire up Date -> Week auto-fill for whichever columns are configured that way.
+      // Matched case-insensitively since actual sheet headers may differ in case
+      // from this config (e.g. "Assigned To" vs "Assigned to").
+      const findInput = (name) => {
+        const key = Object.keys(inputs).find(
+          (k) => k.trim().toLowerCase() === String(name).trim().toLowerCase()
+        );
+        return key ? inputs[key] : null;
+      };
+      const spec = liveFieldSchema[tab] || {};
+      Object.keys(spec).forEach((col) => {
+        if (spec[col].type !== 'week-auto') return;
+        const dateInput = findInput(spec[col].basedOn);
+        const weekInput = findInput(col);
+        if (!dateInput || !weekInput) return;
+        const sync = () => { weekInput.value = computeWeekLabel(dateInput.value); };
+        dateInput.addEventListener('change', sync);
+        sync();
+      });
+
+      // Auto-numbered columns (e.g. "Cleanup Number"): fetch the next value
+      // — highest existing number in that column, plus one — as soon as the
+      // form opens, based on what's actually on the sheet right now.
+      Object.keys(spec).forEach((col) => {
+        if (spec[col].type !== 'sequence') return;
+        const seqInput = findInput(col);
+        if (!seqInput) return;
+        window.statusApp.getNextNumber(tab, col).then((res) => {
+          seqInput.value = res && res.next != null ? res.next : '';
+        }).catch(() => {
+          seqInput.readOnly = false;
+          seqInput.placeholder = 'Enter manually';
+        });
+      });
+
+      els.footer.classList.remove('hidden');
+      // Defensive, on top of the success-path fix above: whatever state
+      // submitBtn was left in by anything that happened before this form
+      // opened (a submit that's still technically in flight after Cancel,
+      // some other edge case) never leaks into a form nobody has touched
+      // yet — every fresh form starts clean, no exceptions.
+      els.submitBtn.disabled = false;
+      els.submitBtn.textContent = 'Submit';
+      els.cancelBtn.onclick = showTabPicker;
+      els.submitBtn.onclick = async () => {
+        els.submitBtn.disabled = true;
+        els.submitBtn.textContent = 'Saving…';
+        const values = {};
+        Object.entries(inputs).forEach(([k, el]) => (values[k] = (el.value || '').trim()));
+        try {
+          await window.statusApp.submitEntry(tab, values);
+          clearDraft(tab); // it actually made it to the sheet — nothing left to restore next time
+          // The catch below already resets these on failure — the success
+          // path never did, so the button stayed stuck at disabled/"Saving…"
+          // forever after every successful submit. Invisible right after a
+          // normal submit (showSuccess hides the footer), but it resurfaced
+          // the next time any form revealed the footer again, looking like
+          // a fresh "stuck on Saving" report on a form nobody had touched yet.
+          els.submitBtn.disabled = false;
+          els.submitBtn.textContent = 'Submit';
+          showSuccess(tab);
+        } catch (err) {
+          els.submitBtn.disabled = false;
+          els.submitBtn.textContent = 'Submit';
+          showError(err.message || String(err), () => showForm(tab));
+        }
+      };
+    } catch (err) {
+      showError(err.message || String(err), () => showForm(tab));
+    }
+  }
+
+  // -------------------- Weekly Connect: view & update tickets --------------------
+  // Fetched fresh every time this screen opens (never cached) — see the
+  // comment on the 'weeklyConnectTickets' action in Code.gs for why:
+  // picking a ticket to update needs the real current state.
+
+  let wcTickets = []; // last fetch — filtering below re-renders from this, no extra network call
+  // Closed questions get their own tab instead of hiding behind a generic
+  // "All" toggle — Resolved/Deferred is genuinely a different list people
+  // look at for a different reason (history/reference) than the live
+  // open-to-pending agenda, which is what "Open" defaults to.
+  let wcTab = 'open'; // 'open' | 'closed'
+  // Collapsed by default on purpose — filters exist for whoever needs
+  // them, but the common case (glance at what's open) shouldn't have to
+  // look past a wall of search/chip controls to get there.
+  let wcFiltersExpanded = false;
+  let wcSearch = '';
+  let wcStatusFilter = []; // multiselect — values are whatever Status strings actually exist
+  let wcRequesterFilter = [];
+  let wcOwnerFilter = [];
+  let wcDateFrom = '';
+  let wcDateTo = '';
+  const WC_CLOSED_STATUSES = ['Resolved', 'Deferred'];
+
+  function wcActiveFilterCount() {
+    return (wcSearch.trim() ? 1 : 0) + (wcStatusFilter.length ? 1 : 0) +
+      (wcRequesterFilter.length ? 1 : 0) + (wcOwnerFilter.length ? 1 : 0) +
+      (wcDateFrom || wcDateTo ? 1 : 0);
+  }
+
+  function wcClearFilters() {
+    wcSearch = ''; wcStatusFilter = []; wcRequesterFilter = []; wcOwnerFilter = [];
+    wcDateFrom = ''; wcDateTo = '';
+  }
+
+  // Whichever tab is active, before any of the filter panel's own filters
+  // are applied on top.
+  function wcBaseTickets() {
+    return wcTickets.filter((t) => {
+      const isClosed = WC_CLOSED_STATUSES.indexOf(t.Status || '') !== -1;
+      return wcTab === 'closed' ? isClosed : !isClosed;
+    });
+  }
+
+  // Chip options are always exactly what's actually present in the
+  // current tab's tickets — never a fixed list that could offer a
+  // Status/Requester/Owner nothing in view actually has.
+  function wcDistinctValues(base, field) {
+    const seen = new Set();
+    base.forEach((t) => { if (t[field]) seen.add(t[field]); });
+    return Array.from(seen).sort();
+  }
+
+  // "search questions and give them in result if any word matches" —
+  // splits the query into words, matches if ANY of them appears anywhere
+  // in the ticket's Issue/Comments/Requester/Owner (case-insensitive).
+  function wcApplyFilters(base) {
+    const words = wcSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return base.filter((t) => {
+      if (wcStatusFilter.length && wcStatusFilter.indexOf(t.Status || '') === -1) return false;
+      if (wcRequesterFilter.length && wcRequesterFilter.indexOf(t.Requester || '') === -1) return false;
+      if (wcOwnerFilter.length && wcOwnerFilter.indexOf(t.Owner || '') === -1) return false;
+      // t.Date is 'yyyy-MM-dd' (see getWeeklyConnectTickets in Code.gs), same
+      // as what <input type="date"> gives back — plain string comparison
+      // sorts correctly for ISO dates, no need to parse either side.
+      if (wcDateFrom && (!t.Date || t.Date < wcDateFrom)) return false;
+      if (wcDateTo && (!t.Date || t.Date > wcDateTo)) return false;
+      if (words.length) {
+        const haystack = [t.Issue, t.Comments, t.Requester, t.Owner].filter(Boolean).join(' ').toLowerCase();
+        if (!words.some((w) => haystack.indexOf(w) !== -1)) return false;
+      }
+      return true;
+    });
+  }
+
+  async function showWeeklyConnectTickets() {
+    els.sub.textContent = 'Weekly Connect Tickets';
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.main.style.minHeight = '';
+    showLoading('Loading tickets…');
+    try {
+      const res = await window.statusApp.getWeeklyConnectTickets();
+      wcTickets = (res && res.tickets) || [];
+      renderWeeklyConnectList();
+    } catch (err) {
+      showError(err.message || String(err), showWeeklyConnectTickets);
+    }
+  }
+
+  function wcBuildTicketCard(t) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'wc-ticket-btn';
+    const statusClass = 'status-' + String(t.Status || '').toLowerCase().replace(/\s+/g, '-');
+    const priorityClass = 'priority-' + String(t.Priority || '').toLowerCase();
+    btn.innerHTML = `
+      <div class="wc-ticket-top">
+        <span class="wc-ticket-id">Q${escapeHtml(t['Ticket ID'])}</span>
+        <div class="wc-badges">
+          ${t.stale ? '<span class="badge stale">Stale</span>' : ''}
+          ${t.Priority ? `<span class="badge ${priorityClass}">${escapeHtml(t.Priority)}</span>` : ''}
+          ${t.Status ? `<span class="badge ${statusClass}">${escapeHtml(t.Status)}</span>` : ''}
+        </div>
+      </div>
+      <div class="wc-ticket-issue">${escapeHtml(stripMarkdown(t.Issue) || '(no description)')}</div>
+      <div class="wc-ticket-meta">${t.Group ? escapeHtml(t.Group) + ' · ' : ''}${escapeHtml(t.Requester || 'Unknown')} · ${escapeHtml(t.Date || '')}</div>
+    `;
+    btn.onclick = () => showWeeklyConnectEdit(t);
+    return btn;
+  }
+
+  // Split out from the full render so typing in the search box only ever
+  // touches this container — re-rendering the whole screen on every
+  // keystroke would recreate the search <input> itself and throw away
+  // focus/cursor position mid-type. Chips/dates/tabs still trigger a full
+  // re-render (nothing being actively typed into there), just search.
+  // Also refreshes the "Filters (N)" toggle label and Clear button by id
+  // — those live outside this container, but search is the one filter
+  // that only ever calls this narrower function, so its count/Clear
+  // visibility would otherwise go stale the moment search became the
+  // only active filter (caught by testing this directly, not assumed).
+  function renderWcResults() {
+    const container = document.getElementById('wc-results');
+    if (!container) return;
+    container.innerHTML = '';
+    const visible = wcApplyFilters(wcBaseTickets());
+    if (!visible.length) {
+      const empty = document.createElement('div');
+      empty.className = 'wc-empty';
+      empty.textContent = wcActiveFilterCount()
+        ? 'No tickets match these filters.'
+        : (wcTab === 'closed' ? 'No closed tickets yet.' : 'No open tickets right now.');
+      container.appendChild(empty);
+    } else {
+      visible.forEach((t) => container.appendChild(wcBuildTicketCard(t)));
+    }
+    const toggleBtn = document.getElementById('wc-filter-toggle-btn');
+    if (toggleBtn) {
+      const activeCount = wcActiveFilterCount();
+      toggleBtn.textContent = (wcFiltersExpanded ? '▾ ' : '▸ ') + 'Filters' + (activeCount ? ` (${activeCount})` : '');
+      const clearBtn = document.getElementById('wc-filter-clear-btn');
+      if (activeCount && !clearBtn) {
+        const newClearBtn = document.createElement('button');
+        newClearBtn.type = 'button';
+        newClearBtn.id = 'wc-filter-clear-btn';
+        newClearBtn.className = 'wc-filter-clear-btn';
+        newClearBtn.textContent = 'Clear';
+        newClearBtn.onclick = () => { wcClearFilters(); renderWeeklyConnectList(); };
+        toggleBtn.parentElement.appendChild(newClearBtn);
+      } else if (!activeCount && clearBtn) {
+        clearBtn.remove();
+      }
+    }
+  }
+
+  function renderWeeklyConnectList() {
+    els.main.innerHTML = '';
+
+    const tabRow = document.createElement('div');
+    tabRow.className = 'wc-filter-row';
+    [['open', 'Open'], ['closed', 'Closed']].forEach(([key, label]) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'wc-filter-btn' + (wcTab === key ? ' active' : '');
+      btn.textContent = label;
+      btn.onclick = () => { wcTab = key; renderWeeklyConnectList(); };
+      tabRow.appendChild(btn);
+    });
+    els.main.appendChild(tabRow);
+
+    const base = wcBaseTickets();
+    const activeCount = wcActiveFilterCount();
+
+    const toggleRow = document.createElement('div');
+    toggleRow.className = 'wc-filter-toggle-row';
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.id = 'wc-filter-toggle-btn';
+    toggleBtn.className = 'wc-filter-toggle-btn';
+    toggleBtn.textContent = (wcFiltersExpanded ? '▾ ' : '▸ ') + 'Filters' + (activeCount ? ` (${activeCount})` : '');
+    toggleBtn.onclick = () => { wcFiltersExpanded = !wcFiltersExpanded; renderWeeklyConnectList(); };
+    toggleRow.appendChild(toggleBtn);
+    if (activeCount) {
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.id = 'wc-filter-clear-btn';
+      clearBtn.className = 'wc-filter-clear-btn';
+      clearBtn.textContent = 'Clear';
+      clearBtn.onclick = () => { wcClearFilters(); renderWeeklyConnectList(); };
+      toggleRow.appendChild(clearBtn);
+    }
+    els.main.appendChild(toggleRow);
+
+    if (wcFiltersExpanded) {
+      const panel = document.createElement('div');
+      panel.className = 'wc-filter-panel';
+
+      const searchWrap = document.createElement('div');
+      searchWrap.className = 'field';
+      const searchLabel = document.createElement('label');
+      searchLabel.textContent = 'Search';
+      searchWrap.appendChild(searchLabel);
+      const searchInput = document.createElement('input');
+      searchInput.type = 'text';
+      searchInput.placeholder = 'Search questions, comments, people…';
+      searchInput.value = wcSearch;
+      searchInput.oninput = debounce(() => {
+        wcSearch = searchInput.value;
+        renderWcResults(); // results only — see renderWcResults' own comment for why
+      }, 250);
+      searchWrap.appendChild(searchInput);
+      panel.appendChild(searchWrap);
+
+      const buildChipFilter = (label, field, selectedArr) => {
+        const options = wcDistinctValues(base, field);
+        if (!options.length) return null;
+        const wrap = document.createElement('div');
+        wrap.className = 'field';
+        const labelEl = document.createElement('label');
+        labelEl.textContent = label;
+        wrap.appendChild(labelEl);
+        const group = document.createElement('div');
+        group.className = 'chip-group';
+        options.forEach((val) => {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'chip' + (selectedArr.indexOf(val) !== -1 ? ' selected' : '');
+          chip.textContent = val;
+          chip.onclick = () => {
+            const idx = selectedArr.indexOf(val);
+            if (idx === -1) selectedArr.push(val); else selectedArr.splice(idx, 1);
+            renderWeeklyConnectList();
+          };
+          group.appendChild(chip);
+        });
+        wrap.appendChild(group);
+        return wrap;
+      };
+
+      const statusChips = buildChipFilter('Status', 'Status', wcStatusFilter);
+      if (statusChips) panel.appendChild(statusChips);
+      const requesterChips = buildChipFilter('Requester', 'Requester', wcRequesterFilter);
+      if (requesterChips) panel.appendChild(requesterChips);
+      const ownerChips = buildChipFilter('Owner', 'Owner', wcOwnerFilter);
+      if (ownerChips) panel.appendChild(ownerChips);
+
+      const dateWrap = document.createElement('div');
+      dateWrap.className = 'field';
+      const dateLabel = document.createElement('label');
+      dateLabel.textContent = 'Date range';
+      dateWrap.appendChild(dateLabel);
+      const dateRow = document.createElement('div');
+      dateRow.className = 'wc-date-row';
+      const fromInput = document.createElement('input');
+      fromInput.type = 'date';
+      fromInput.value = wcDateFrom;
+      fromInput.onchange = () => { wcDateFrom = fromInput.value; renderWcResults(); };
+      const toInput = document.createElement('input');
+      toInput.type = 'date';
+      toInput.value = wcDateTo;
+      toInput.onchange = () => { wcDateTo = toInput.value; renderWcResults(); };
+      dateRow.appendChild(fromInput);
+      dateRow.appendChild(toInput);
+      dateWrap.appendChild(dateRow);
+      panel.appendChild(dateWrap);
+
+      els.main.appendChild(panel);
+    }
+
+    const postBtn = document.createElement('button');
+    postBtn.type = 'button';
+    postBtn.className = 'tab-btn';
+    postBtn.style.cssText = 'width:100%; margin-bottom:8px;';
+    postBtn.textContent = '📨 Post to Teams…';
+    postBtn.onclick = showPostToTeams;
+    els.main.appendChild(postBtn);
+
+    const results = document.createElement('div');
+    results.id = 'wc-results';
+    els.main.appendChild(results);
+    renderWcResults();
+
+    const backBtn = document.createElement('button');
+    backBtn.type = 'button';
+    backBtn.className = 'secondary';
+    backBtn.style.cssText = 'width:100%; margin-top:8px;';
+    backBtn.textContent = '← Back';
+    backBtn.onclick = () => showForm(WEEKLY_CONNECT_TAB);
+    els.main.appendChild(backBtn);
+  }
+
+  // Manual, on-demand — replaces the old "auto-post whatever fell in a
+  // fixed Wednesday-to-Wednesday window" behavior. The real discussion
+  // this compiles for doesn't happen on a fixed weekday, so instead of
+  // guessing a window, this reuses Report Generator's own range picker
+  // (rangeSubFieldsHtml/computeRangeFromOptions below) and just asks:
+  // which group, which dates.
+  function showPostToTeams() {
+    els.sub.textContent = 'Post to Teams';
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.main.style.minHeight = '';
+    const groups = resolveOptions('ConnectGroups', liveOptions);
+    els.main.innerHTML = `
+      ${groups.length ? `
+        <div class="field">
+          <label>Group</label>
+          <select id="post-teams-group">
+            ${groups.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}
+          </select>
+        </div>` : `<p class="login-hint">No Connect Groups configured yet — this will post to the legacy single Teams webhook, if one's set.</p>`}
+      <div class="field">
+        <label>Range</label>
+        <select id="range-type">
+          <option value="custom" selected>Custom Range</option>
+          <option value="month">Monthly</option>
+          <option value="quarter">Quarterly</option>
+          <option value="year">Yearly</option>
+        </select>
+        <!-- No "This Week" here on purpose — that option resolves to a
+             backend default (Report Generator's Monday-based week), and
+             the whole point of this screen is never guessing a window;
+             every post needs an explicit range someone actually picked. -->
+      </div>
+      <div id="range-fields"></div>
+      <div class="login-err" id="post-teams-err"></div>
+      <button class="primary" id="post-teams-btn" style="width:100%;">Post to Teams</button>
+      <button class="secondary" id="post-teams-back-btn" style="width:100%; margin-top:8px;">Back</button>
+    `;
+
+    const rangeFields = document.getElementById('range-fields');
+    const rangeType = document.getElementById('range-type');
+    const renderSubFields = () => { rangeFields.innerHTML = rangeSubFieldsHtml(rangeType.value); };
+    rangeType.onchange = renderSubFields;
+    renderSubFields();
+
+    document.getElementById('post-teams-back-btn').onclick = renderWeeklyConnectList;
+
+    document.getElementById('post-teams-btn').onclick = async () => {
+      const errEl = document.getElementById('post-teams-err');
+      errEl.textContent = '';
+      let range;
+      try {
+        range = computeRangeFromOptions();
+        if (!range) throw new Error('Pick a specific date range — "This Week" alone isn\'t enough here.');
+      } catch (err) {
+        errEl.textContent = err.message;
+        return;
+      }
+      const groupSelect = document.getElementById('post-teams-group');
+      const group = groupSelect ? groupSelect.value : '';
+      const btn = document.getElementById('post-teams-btn');
+      btn.disabled = true;
+      btn.textContent = 'Posting…';
+      try {
+        const result = await window.statusApp.postWeeklyConnectToTeamsNow(group, range);
+        if (!result || !result.ok) throw new Error((result && result.error) || 'Post failed.');
+        showResult({
+          success: true,
+          title: 'Posted to Teams',
+          subtitle: result.message,
+          doneLabel: 'Done',
+          onDone: showWeeklyConnectTickets,
+        });
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Post to Teams';
+        errEl.textContent = err.message || String(err);
+      }
+    };
+  }
+
+  function showWeeklyConnectEdit(ticket) {
+    els.sub.textContent = `Ticket Q${ticket['Ticket ID']}`;
+    els.main.style.minHeight = '';
+    els.footer.classList.add('hidden');
+    // renderMarkdownLite, not escapeHtml — Issue may be a richtext field
+    // (see _FieldSchema), so this shows it actually bold/bulleted/linked
+    // rather than the raw **/- /[]() syntax. Safe either way: a plain
+    // (non-richtext) Issue has none of that syntax to begin with, and
+    // renderMarkdownLite escapes real HTML before ever substituting its
+    // own tags in.
+    els.main.innerHTML = `
+      <div class="wc-detail-issue">${renderMarkdownLite(ticket.Issue || '(no description)')}</div>
+      <div class="wc-detail-meta">
+        ${ticket.Group ? escapeHtml(ticket.Group) + ' · ' : ''}${escapeHtml(ticket.Requester || 'Unknown')} · ${escapeHtml(ticket.Date || '')}${ticket.URL ? ' · <a href="#" id="wc-url-link">Reference link</a>' : ''}
+      </div>
+    `;
+    if (ticket.URL) {
+      document.getElementById('wc-url-link').onclick = (e) => {
+        e.preventDefault();
+        window.statusApp.openExternal(ticket.URL);
+      };
+    }
+
+    const statusWrap = document.createElement('div');
+    statusWrap.className = 'field';
+    const statusLabel = document.createElement('label');
+    statusLabel.textContent = 'Status';
+    const statusSelect = buildFieldInput(WEEKLY_CONNECT_TAB, 'Status', ticket.Status);
+    statusWrap.appendChild(statusLabel);
+    statusWrap.appendChild(statusSelect);
+    els.main.appendChild(statusWrap);
+
+    const commentsWrap = document.createElement('div');
+    commentsWrap.className = 'field';
+    const commentsLabel = document.createElement('label');
+    commentsLabel.textContent = 'Comments';
+    // buildFieldInput, not a hand-built textarea — picks up the richtext
+    // toolbar+preview automatically if Comments' Type is set to richtext
+    // (see _FieldSchema), same as the entry form; falls back to a plain
+    // textarea otherwise, exactly like before.
+    const commentsInput = buildFieldInput(WEEKLY_CONNECT_TAB, 'Comments', ticket.Comments);
+    commentsWrap.appendChild(commentsLabel);
+    commentsWrap.appendChild(commentsInput);
+    els.main.appendChild(commentsWrap);
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex; gap:8px; margin-top:6px;';
+    const backBtn = document.createElement('button');
+    backBtn.type = 'button';
+    backBtn.className = 'secondary';
+    backBtn.style.flex = '1';
+    backBtn.textContent = '← Back';
+    backBtn.onclick = () => renderWeeklyConnectList();
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'primary';
+    saveBtn.style.flex = '1';
+    saveBtn.textContent = 'Save';
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      try {
+        const result = await window.statusApp.updateWeeklyConnectTicket(
+          ticket['Ticket ID'], statusSelect.value, commentsInput.value.trim()
+        );
+        if (!result || result.ok === false) throw new Error((result && result.error) || 'Save failed.');
+        showResult({
+          success: true,
+          title: 'Ticket Updated',
+          subtitle: `Q${ticket['Ticket ID']} saved.`,
+          doneLabel: 'Done',
+          onDone: showWeeklyConnectTickets,
+        });
+      } catch (err) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
+        showError(err.message || String(err), () => showWeeklyConnectEdit(ticket));
+      }
+    };
+    actions.appendChild(backBtn);
+    actions.appendChild(saveBtn);
+    els.main.appendChild(actions);
+  }
+
+  els.closeBtn.onclick = () => window.statusApp.hideWindow();
+  els.settingsBtn.onclick = () => showSettings();
+  els.viewReportBtn.onclick = () => window.statusApp.openSheet();
+  els.submitReportBtn.onclick = () => showReportOptions();
+
+  // Version badge + "there's a newer build" nudge — checked once per app
+  // launch (not on every popup open, to keep re-opening the form instant).
+  // Returns true only if `a` is strictly newer than `b` (semver-ish "x.y.z"
+  // compare, not just string inequality — otherwise a stale LatestVersion
+  // behind the running app's own version would wrongly show "update available").
+  function isNewerVersion(a, b) {
+    const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+    const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const da = pa[i] || 0;
+      const db = pb[i] || 0;
+      if (da !== db) return da > db;
+    }
+    return false;
+  }
+
+  // On Windows, electron-updater may already have a new version fully
+  // downloaded in the background by the time this popup opens (it checks
+  // at launch and every few hours, independent of whether the popup is
+  // even open) — in that case, skip straight to "Restart to update"
+  // instead of the browser-download link, since there's nothing left to
+  // download. Mac has no such state (no auto-update there — see the
+  // comment in main.js), so isUpdateReadyToInstall() is always false.
+  //
+  // Kept as a soft, non-blocking header link (not the hard gate below) —
+  // this only fires via onUpdateDownloaded, i.e. a download that finished
+  // WHILE this popup was already open, possibly mid-form. Interrupting
+  // that specific moment was the one thing the original "never force
+  // anyone mid-task" design was actually protecting; the hard gate below
+  // only ever runs at open time, when there's nothing mid-task to lose.
+  function showUpdateReadyToInstall(version) {
+    els.updateLink.textContent = 'Restart to update';
+    els.updateLink.title = version ? `Update ready — v${version}` : 'Update downloaded — click to restart and install';
+    els.updateLink.onclick = () => window.statusApp.quitAndInstall();
+    els.updateLink.classList.add('visible');
+  }
+
+  // Fires whenever a background download finishes WHILE this popup is
+  // open (the Windows-only autoUpdater check on a timer in main.js isn't
+  // tied to the popup being open at all) — flips the banner over live,
+  // same end state as checkForcedUpdateGate() finding it already downloaded.
+  //
+  // If the forced gate below is currently showing its "downloading in the
+  // background" waiting screen, flip it straight to "Restart to update"
+  // right now too — don't make anyone wait out the poll interval below
+  // when the real event just told us it's done.
+  let forcedGatePollTimer = null;
+  window.statusApp.onUpdateDownloaded(() => {
+    showUpdateReadyToInstall();
+    if (forcedGatePollTimer) {
+      clearInterval(forcedGatePollTimer);
+      forcedGatePollTimer = null;
+      showForcedUpdateGate({ ready: true });
+    }
+  });
+
+  // The hard gate: replaces the whole screen with an update prompt and
+  // hides Settings, leaving only the update action itself and the
+  // Contact Admin footer (footer.js is a sibling of #main, untouched by
+  // this) clickable. This is a deliberate reversal of the old "never
+  // force anyone mid-task" policy above — that was fine as long as
+  // running an old build just meant missing new features, but a build
+  // old enough to predate a backend change can sit there submitting into
+  // a permanent "Saving..." with no obvious reason why, which is worse
+  // than an interruption. Runs ONLY at popup-open time (initial load and
+  // every onOpened — see below), never mid-session, so it never yanks a
+  // form out from under someone already using the app; the live
+  // in-session case above stays a soft link on purpose. A version check
+  // that itself fails (offline, backend hiccup) fails OPEN — never lock
+  // someone out over the check failing, only over a genuinely confirmed
+  // newer version.
+  //
+  // A build old enough to predate this gate (and the version-check code
+  // itself) can't be reached by any of this — there's no code running on
+  // that machine to trigger it. Someone stuck like that needs one manual
+  // reinstall of the current installer; after that, this gate (and
+  // Windows' silent auto-update) covers them going forward.
+  function showForcedUpdateGate({ ready, version, downloadUrl, waiting }) {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.settingsBtn.style.display = 'none';
+    els.sub.textContent = 'Update required';
+    els.main.style.minHeight = '';
+
+    let message;
+    let buttonLabel = null;
+    if (ready) {
+      message = 'A newer version has already downloaded in the background — restart to finish updating and continue.';
+      buttonLabel = 'Restart to update';
+    } else if (waiting) {
+      // Windows: electron-updater is already downloading this silently in
+      // the background (see the comment in checkForcedUpdateGate below) —
+      // there's nothing to click yet. This screen flips itself to "Restart
+      // to update" on its own, either via the live onUpdateDownloaded
+      // event above or the poll in startForcedGatePolling() below.
+      message = `A newer version${version ? ` (v${escapeHtml(version)})` : ''} is downloading in the background. This screen will switch to "Restart to update" automatically as soon as it's ready — no action needed yet.`;
+    } else {
+      message = `A newer version${version ? ` (v${escapeHtml(version)})` : ''} is available. This build is no longer supported — update to continue.`;
+      buttonLabel = 'Download update';
+    }
+
+    els.main.innerHTML = `
+      <p class="login-hint">${message}</p>
+      ${buttonLabel
+        ? `<button class="primary" id="force-update-btn" style="width:100%;">${buttonLabel}</button>`
+        : '<p class="login-hint" style="text-align:center;">⏳ Downloading…</p>'}
+      <p class="login-hint" style="margin-top:10px;">Can't update right now? Use "Contact Admin" below.</p>
+    `;
+    if (buttonLabel) {
+      document.getElementById('force-update-btn').onclick = () => {
+        if (ready) window.statusApp.quitAndInstall();
+        else if (downloadUrl) window.statusApp.openExternal(downloadUrl);
+      };
+    }
+
+    if (waiting) startForcedGatePolling();
+  }
+
+  // Backs up the live onUpdateDownloaded event above for the case where the
+  // download finishes while this popup is closed/hidden (reopening later
+  // re-renders via checkForcedUpdateGate anyway, but this also covers the
+  // rarer case of the IPC event itself getting missed) — polls the same
+  // in-memory flag main.js already exposes rather than re-hitting the
+  // backend, so it's cheap enough to run every few seconds for as long as
+  // the wait lasts, and it stops itself the moment it finds ready===true.
+  function startForcedGatePolling() {
+    if (forcedGatePollTimer) return;
+    forcedGatePollTimer = setInterval(async () => {
+      try {
+        if (await window.statusApp.isUpdateReadyToInstall()) {
+          clearInterval(forcedGatePollTimer);
+          forcedGatePollTimer = null;
+          showForcedUpdateGate({ ready: true });
+        }
+      } catch {
+        /* best-effort — next tick tries again */
+      }
+    }, 3000);
+  }
+
+  async function checkForcedUpdateGate() {
+    try {
+      const version = await window.statusApp.getAppVersion();
+      els.versionBadge.textContent = `v${version}`;
+
+      if (await window.statusApp.isUpdateReadyToInstall()) {
+        showForcedUpdateGate({ ready: true });
+        return true;
+      }
+
+      const latest = await window.statusApp.checkLatestVersion();
+      if (latest && latest.ok && latest.latest && isNewerVersion(latest.latest, version)) {
+        // On Windows, electron-updater is already silently downloading this
+        // in the background (autoDownload=true in main.js) — showing a
+        // manual "Download update" browser-link screen on top of that is
+        // exactly the confusing, redundant screen this was changed to
+        // avoid. Show the passive waiting state instead; it flips itself
+        // to "Restart to update" once the download actually finishes, no
+        // popup close/reopen required. Mac has no autoUpdater (see the
+        // comment above autoUpdater.autoDownload in main.js) so it keeps
+        // the original manual-download link — nothing is being fetched in
+        // the background there to wait on.
+        showForcedUpdateGate({
+          ready: false,
+          version: latest.latest,
+          downloadUrl: latest.downloadUrl,
+          waiting: !!latest.isWindows,
+        });
+        return true;
+      }
+    } catch {
+      /* best-effort — never block the app over a version check that itself failed */
+    }
+    return false;
+  }
+
+  // Fire-and-forget, same as getYourName below — main.js already caches
+  // this in memory (stale-while-revalidate), so calling it again on every
+  // open is cheap and keeps liveOptions from ever going stale for long.
+  function refreshLiveOptions() {
+    window.statusApp.getOptions().then((res) => {
+      liveOptions = (res && res.options) || {};
+    }).catch(() => {
+      /* best-effort — resolveOptions() returns [] for anything not loaded yet */
+    });
+  }
+
+  // Same fire-and-forget, stale-while-revalidate shape as refreshLiveOptions
+  // above — main.js already caches this in memory, so this is cheap even
+  // when it does hit the network. liveCategories is refreshed separately,
+  // inline in showCategoryPicker() (awaited there, not fire-and-forget),
+  // since it directly decides which screen renders instead of just filling
+  // in a field already on screen.
+  function refreshLiveFieldSchema() {
+    window.statusApp.getFieldSchema().then((res) => {
+      liveFieldSchema = (res && res.fieldSchema) || {};
+    }).catch(() => {
+      /* best-effort — fieldSpecFor() falls back to a plain text box regardless */
+    });
+  }
+
+  window.statusApp.onOpened(async () => {
+    yourName = await window.statusApp.getYourName();
+    refreshLiveOptions();
+    refreshLiveFieldSchema();
+    // Version gate first, every time the popup opens — an update that
+    // finished downloading (or shipped) while this was closed should
+    // block before anything else, same reasoning as checkLoginGate.
+    if (await checkForcedUpdateGate()) return;
+    // a fresh open always starts at the top, not wherever it was left last
+    // time — unless checkLoginGate finds a login is now needed, in which
+    // case that's the top instead.
+    if (!(await checkLoginGate())) showCategoryPicker();
+  });
+
+  window.statusApp.getYourName().then((n) => (yourName = n));
+  refreshLiveOptions();
+  refreshLiveFieldSchema();
+  checkForcedUpdateGate().then((gated) => {
+    if (gated) return;
+    checkLoginGate().then((loginGated) => { if (!loginGated) showCategoryPicker(); });
+  });
+
+  // Keep the actual OS window sized to whatever's on screen right now,
+  // instead of a fixed height that leaves dead space for a short screen
+  // (a few tabs) or clips a tall one (report options with a big date
+  // picker). Fires on every render automatically, no need to call it
+  // from each show*() function by hand.
+  const cardEl = document.getElementById('card');
+  let resizeTimer = null;
+  new ResizeObserver(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      window.statusApp.resizeWindow(cardEl.scrollHeight);
+    }, 30);
+  }).observe(cardEl);
+</script>
+</body>
+</html>

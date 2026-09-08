@@ -9,3 +9,6 @@ desktop-widget-electron/config.json
 desktop-widget-electron/config.template.json
 desktop-widget-electron/node_modules/
 desktop-widget-electron/dist/
+
+# Scratch files saved locally by the Claude desktop app (previews, mockups) — not part of the app
+Claude outputs/

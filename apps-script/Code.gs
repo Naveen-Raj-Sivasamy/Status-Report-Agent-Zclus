@@ -229,6 +229,18 @@ function doGet(e) {
     if (action === 'categories') {
       return jsonOut({ ok: true, categories: cached('categories', getCategoriesMap) });
     }
+    /** Which tabs route their new entries somewhere other than this Sheet
+     * (right now, just "Excel" — see _DataSources/getDataSourceForTab_) —
+     * lets the widget skip straight to the plain add-entry form for those
+     * tabs instead of the existing-entries list (which can't read Excel
+     * back yet). Deliberately just {tab: sourceType}, no webhook URLs —
+     * see getDataSources doPost action for the admin-only version that
+     * does include them; a webhook URL is a bearer secret and doGet has
+     * no token check at all. Tabs that are plain Google Sheet tabs are
+     * omitted entirely (that's the default), so this is normally empty. */
+    if (action === 'dataSources') {
+      return jsonOut({ ok: true, dataSources: cached('dataSourceTypes', getDataSourceTypesOnly_) });
+    }
     /** Every Weekly Connect ticket — powers the widget's "View & Update
      * Tickets" screen. Deliberately NOT run through cached() like tabs/
      * options/etc above: tickets change constantly (new ones logged
@@ -664,6 +676,29 @@ function doPost(e) {
     if (body.action === 'getConnectGroups') {
       return jsonOut({ ok: true, groups: getConnectGroups() });
     }
+    /** Admin-only view of _DataSources, webhook URLs included — kept in
+     * doPost (token-gated) rather than doGet, unlike the tab/columns/
+     * options/categories/fieldSchema reads, because a Power Automate
+     * webhook URL functions as a bearer secret: anyone who has it can
+     * inject rows into that Excel file. See the 'dataSources' doGet
+     * action below for the stripped-down, safe-to-expose version the
+     * widget itself actually uses to decide how a tab behaves. */
+    if (body.action === 'getDataSources') {
+      return jsonOut({ ok: true, dataSources: getDataSources() });
+    }
+    if (body.action === 'saveDataSources') {
+      var dsLock = LockService.getScriptLock();
+      if (!dsLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        writeDataSources(body.dataSources || []);
+      } finally {
+        dsLock.releaseLock();
+      }
+      CacheService.getScriptCache().remove('dataSourceTypes');
+      return jsonOut({ ok: true, message: 'Data sources saved.' });
+    }
     if (body.action === 'saveConnectGroups') {
       var groupsLock = LockService.getScriptLock();
       if (!groupsLock.tryLock(LOCK_WAIT_MS)) {
@@ -841,6 +876,104 @@ function doPost(e) {
       return jsonOut({ ok: true, message: 'LatestVersion set to ' + body.version, updated: updated });
     }
 
+    /** Every existing row on a tab, generic across every tab in the app —
+     * powers the widget's "existing entries" list (tap a tab, see what's
+     * already there, instead of jumping straight to a blank add-entry
+     * form). Each row carries its actual sheet row number (`rowIndex`) so
+     * updateTabRow/deleteTabRow below know exactly which row to touch —
+     * there's no per-tab unique-ID column to key off of the way Weekly
+     * Connect has "Ticket ID", so row position is the only handle
+     * available. Newest first, same convention as getWeeklyConnectTickets.
+     * A doPost action (token-gated) rather than a doGet one like tabs/
+     * options/fieldSchema — this can return arbitrary column values from
+     * any tab (names, reasons, whatever a custom field holds), the same
+     * sensitivity level as getReportSettings, not the structure-only
+     * reads doGet allows through unauthenticated. */
+    if (body.action === 'getTabRows') {
+      if (!body.tab) return jsonOut({ ok: false, error: 'Missing "tab".' });
+      return jsonOut({ ok: true, rows: getTabRows_(body.tab) });
+    }
+
+    /** Overwrites one existing row in place — the list screen's "Save" on
+     * an edited entry. `expected` (the row's values as the list last saw
+     * them) is an optimistic-concurrency guard: if the row changed (someone
+     * else edited/deleted it, or the tab was reorganized) since the editor
+     * opened it, this refuses instead of silently clobbering whatever is
+     * there now. Same lock/leave-conflict handling as a fresh submit
+     * (below), since editing a Leave row can just as easily create a
+     * same-date clash as adding a new one. */
+    if (body.action === 'updateTabRow') {
+      if (!body.tab) return jsonOut({ ok: false, error: 'Missing "tab".' });
+      if (!body.rowIndex) return jsonOut({ ok: false, error: 'Missing "rowIndex".' });
+      var updSheet = getSheetByName(body.tab);
+      if (!updSheet) return jsonOut({ ok: false, error: 'Unknown tab: ' + body.tab });
+      var updLock = LockService.getScriptLock();
+      if (!updLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        var updHeaders = getHeaderRow(updSheet);
+        var updRowIndex = Number(body.rowIndex);
+        if (updRowIndex < 2 || updRowIndex > updSheet.getLastRow()) {
+          return jsonOut({ ok: false, error: 'That entry no longer exists — refresh the list and try again.' });
+        }
+        var updCurrent = updSheet.getRange(updRowIndex, 1, 1, updHeaders.length).getValues()[0];
+        if (body.expected && !rowMatchesExpected_(updHeaders, updCurrent, body.expected)) {
+          return jsonOut({ ok: false, error: 'This entry changed since you opened it — refresh the list and try again.' });
+        }
+        var updValues = body.values || {};
+        if (body.tab === LEAVE_TAB_NAME) {
+          var updConflict = findLeaveDateConflict(updHeaders, updSheet, updValues, updRowIndex);
+          if (updConflict) {
+            return jsonOut({ ok: false, error: updConflict + ' has already applied for leave on this date.' });
+          }
+        }
+        var updNewRow = updHeaders.map(function (col) {
+          if (col === TIMESTAMP_COLUMN) return updCurrent[updHeaders.indexOf(col)]; // edits don't re-stamp when it was first added
+          return Object.prototype.hasOwnProperty.call(updValues, col) ? updValues[col] : '';
+        });
+        updSheet.getRange(updRowIndex, 1, 1, updHeaders.length).setValues([updNewRow]);
+        var updSummary = updHeaders.slice(0, 3).map(function (h) {
+          return updValues[h] ? h + ': ' + String(updValues[h]).slice(0, 40) : null;
+        }).filter(Boolean).join(', ');
+        logAudit_(body.sessionToken, 'edit', body.tab, updSummary || 'Entry updated.');
+        return jsonOut({ ok: true, message: 'Updated.' });
+      } finally {
+        updLock.releaseLock();
+      }
+    }
+
+    /** Removes one existing row — the list screen's delete/remove action.
+     * Same optimistic-concurrency guard as updateTabRow above. */
+    if (body.action === 'deleteTabRow') {
+      if (!body.tab) return jsonOut({ ok: false, error: 'Missing "tab".' });
+      if (!body.rowIndex) return jsonOut({ ok: false, error: 'Missing "rowIndex".' });
+      var delSheet = getSheetByName(body.tab);
+      if (!delSheet) return jsonOut({ ok: false, error: 'Unknown tab: ' + body.tab });
+      var delLock = LockService.getScriptLock();
+      if (!delLock.tryLock(LOCK_WAIT_MS)) {
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      try {
+        var delRowIndex = Number(body.rowIndex);
+        if (delRowIndex < 2 || delRowIndex > delSheet.getLastRow()) {
+          return jsonOut({ ok: false, error: 'That entry no longer exists — it may have already been removed.' });
+        }
+        if (body.expected) {
+          var delHeaders = getHeaderRow(delSheet);
+          var delCurrent = delSheet.getRange(delRowIndex, 1, 1, delHeaders.length).getValues()[0];
+          if (!rowMatchesExpected_(delHeaders, delCurrent, body.expected)) {
+            return jsonOut({ ok: false, error: 'This entry changed since you opened it — refresh the list and try again.' });
+          }
+        }
+        delSheet.deleteRow(delRowIndex);
+        logAudit_(body.sessionToken, 'delete', body.tab, 'Entry removed.');
+        return jsonOut({ ok: true, message: 'Removed.' });
+      } finally {
+        delLock.releaseLock();
+      }
+    }
+
     if (!body.tab) {
       return jsonOut({ ok: false, error: 'Missing "tab".' });
     }
@@ -916,8 +1049,19 @@ function doPost(e) {
         }
       }
       if (!resultObj) {
-        sheet.appendRow(row);
-        resultObj = { ok: true, message: 'Saved to "' + body.tab + '".' };
+        // See _DataSources above — everything up to this point (headers,
+        // idempotency, the Leave conflict check) is identical either way;
+        // this is the one line that actually decides where the row ends
+        // up. The tab's own sheet tab still exists and still defines its
+        // columns/Field Types/Options either way — this just skips
+        // appendRow-ing into it when its data doesn't actually live here.
+        var dataSource = getDataSourceForTab_(body.tab);
+        if (dataSource.sourceType === 'Excel') {
+          resultObj = postRowToExcelWebhook_(dataSource.webhookUrl, body.tab, headers, values);
+        } else {
+          sheet.appendRow(row);
+          resultObj = { ok: true, message: 'Saved to "' + body.tab + '".' };
+        }
       }
       // 300s comfortably covers the retry window (3 attempts, exponential
       // backoff up to a few seconds apart, each bounded by a 15s client
@@ -1017,7 +1161,8 @@ function setupScriptProperties() {
  * to wait out CACHE_SECONDS for the widget to notice. */
 function clearCache() {
   CacheService.getScriptCache().removeAll(
-    listVisibleTabsUncached().map(function (t) { return 'columns:' + t; }).concat(['tabs', 'options', 'fieldSchema', 'categories'])
+    listVisibleTabsUncached().map(function (t) { return 'columns:' + t; })
+      .concat(['tabs', 'options', 'fieldSchema', 'categories', 'dataSourceTypes'])
   );
   Logger.log('Cache cleared.');
 }
@@ -1395,6 +1540,7 @@ function listVisibleTabsUncached() {
   ensureConnectGroupsTab();
   ensureWeeklyConnectTab();
   ensureFeaturesTab();
+  ensureDataSourcesTab();
   var hiddenTabs = getHiddenTabs();
   return SpreadsheetApp.getActiveSpreadsheet()
     .getSheets()
@@ -1434,8 +1580,11 @@ function ensureLeaveTab() {
  * that row's Name so doPost can reject the new one with a clear message;
  * returns '' when the date's free. Only meaningful called while already
  * holding the write lock (see doPost) — that's what makes the check
- * atomic against two near-simultaneous submissions for the same date. */
-function findLeaveDateConflict(headers, sheet, values) {
+ * atomic against two near-simultaneous submissions for the same date.
+ * `excludeRowIndex` (1-based sheet row) is set when editing an existing
+ * row — see updateTabRow in doPost — so a leave entry doesn't get flagged
+ * as conflicting with its own, unchanged date. */
+function findLeaveDateConflict(headers, sheet, values, excludeRowIndex) {
   var dateIndex = findColumnIndex(headers, 'Date');
   var nameIndex = findColumnIndex(headers, 'Name');
   if (dateIndex === -1) return ''; // no Date column on this tab — nothing to check
@@ -1450,6 +1599,7 @@ function findLeaveDateConflict(headers, sheet, values) {
   var numCols = Math.max(dateIndex, nameIndex) + 1;
   var rows = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
   for (var i = 0; i < rows.length; i++) {
+    if (excludeRowIndex && (i + 2) === excludeRowIndex) continue; // that's this same row being edited
     if (normalizeDateForCompare(rows[i][dateIndex], tz) === target) {
       return nameIndex === -1 ? 'Someone' : (String(rows[i][nameIndex]).trim() || 'Someone');
     }
@@ -1623,6 +1773,136 @@ function syncConnectGroupOptions_(groups) {
 function getConnectGroupWebhookUrl(groupName) {
   var match = getConnectGroups().filter(function (g) { return g.name === groupName; })[0];
   return match ? match.webhookUrl : '';
+}
+
+// -------------------- Data Sources (where a tab's rows actually live) ------
+//
+// Every tab saves straight into this Sheet by default — that's the whole
+// app up to this point. This is the first crack in that assumption:
+// _DataSources lets specific tabs be flagged as living somewhere else
+// instead (right now, "Excel" — a Power Automate flow that writes into an
+// actual .xlsx on OneDrive/SharePoint, since a personal/no-tenant-admin
+// account can't authenticate straight to Microsoft Graph from Apps Script).
+// An Excel-routed tab still needs to exist as a real (empty) tab here —
+// that's still what defines its columns/Field Types/Options, same as
+// every other tab — this table only redirects where its ROWS go once
+// submitted. See postRowToExcelWebhook_ (doPost's default submit-entry
+// handler) for the actual routing, and the 'dataSources'/'getDataSources'
+// doGet/doPost actions above for the two read paths (type-only for the
+// widget, full webhook URLs for the admin Manage screen).
+var DATA_SOURCES_TAB_NAME = '_DataSources';
+
+/** Created once, empty apart from headers — same self-creating,
+ * never-touched-again-after-creation pattern as _ConnectGroups. An empty
+ * table just means "every tab is a plain Google Sheet tab", the same as
+ * before this existed. */
+function ensureDataSourcesTab() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(DATA_SOURCES_TAB_NAME)) return;
+  var sheet = ss.insertSheet(DATA_SOURCES_TAB_NAME);
+  sheet.getRange(1, 1, 1, 3).setValues([['Tab', 'Source Type', 'Webhook URL']]);
+}
+
+/** [{tab, sourceType, webhookUrl}, ...], sheet row order. sourceType is
+ * whatever's actually in the cell ('Excel' is the only non-default value
+ * anything currently does something with) — not validated/coerced here,
+ * same "trust what's in the cell" approach _Options/_FieldSchema already
+ * take. */
+function getDataSources() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DATA_SOURCES_TAB_NAME);
+  if (!sheet) return [];
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return [];
+  var values = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+  var sources = [];
+  values.forEach(function (row) {
+    var tab = String(row[0]).trim();
+    if (!tab) return;
+    sources.push({
+      tab: tab,
+      sourceType: String(row[1]).trim() || 'GoogleSheet',
+      webhookUrl: String(row[2]).trim(),
+    });
+  });
+  return sources;
+}
+
+/** Replaces _DataSources' data rows wholesale — same "client always sends
+ * the full current list back" shape as writeConnectGroups/writeOptionsMap. */
+function writeDataSources(sources) {
+  ensureDataSourcesTab();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DATA_SOURCES_TAB_NAME);
+  var rows = (sources || [])
+    .map(function (d) {
+      return [String(d.tab || '').trim(), String(d.sourceType || '').trim(), String(d.webhookUrl || '').trim()];
+    })
+    .filter(function (r) { return r[0]; });
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, 3).clearContent();
+  if (rows.length) sheet.getRange(2, 1, rows.length, 3).setValues(rows);
+}
+
+/** {tab: sourceType} for every NON-default (i.e. Excel) entry only — the
+ * safe-to-expose-unauthenticated shape (no webhook URLs) behind the
+ * 'dataSources' doGet action. Plain Google Sheet tabs are omitted rather
+ * than listed as 'GoogleSheet', so this is normally an empty object. */
+function getDataSourceTypesOnly_() {
+  var map = {};
+  getDataSources().forEach(function (d) {
+    if (d.sourceType && d.sourceType !== 'GoogleSheet') map[d.tab] = d.sourceType;
+  });
+  return map;
+}
+
+/** {sourceType, webhookUrl} for one tab — defaults to {'GoogleSheet', ''}
+ * for every tab not explicitly listed in _DataSources, which is every tab
+ * that existed before this feature and every tab anyone creates without
+ * touching this table. Only doPost's default submit-entry handler and
+ * postRowToExcelWebhook_ call this — it's the one place server-side logic
+ * actually branches on where a tab's rows live. */
+function getDataSourceForTab_(tab) {
+  var match = getDataSources().filter(function (d) { return d.tab === tab; })[0];
+  return match ? { sourceType: match.sourceType, webhookUrl: match.webhookUrl } : { sourceType: 'GoogleSheet', webhookUrl: '' };
+}
+
+/** Sends one new entry to the Power Automate flow configured for this
+ * tab, instead of appendRow-ing it into a Sheet — see the _DataSources
+ * comment above for why this exists at all. The flow is expected to
+ * respond 2xx on success; anything else (including an unreachable URL)
+ * comes back as a clear ok:false rather than a raw stack trace, so the
+ * widget can show the real reason a submit didn't go through. Payload
+ * shape is deliberately the same {tab, values} shape body already has
+ * for a normal submit, so the flow's JSON schema is simple to write. */
+function postRowToExcelWebhook_(webhookUrl, tab, headers, values) {
+  if (!webhookUrl) {
+    return {
+      ok: false,
+      error: '"' + tab + '" is set to save to Excel, but no webhook URL is configured yet — set one in Manage → Data Sources.',
+    };
+  }
+  var payload = {};
+  headers.forEach(function (h) {
+    if (h === TIMESTAMP_COLUMN) {
+      payload[h] = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+      return;
+    }
+    payload[h] = Object.prototype.hasOwnProperty.call(values, h) ? values[h] : '';
+  });
+  try {
+    var resp = UrlFetchApp.fetch(webhookUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ tab: tab, values: payload }),
+      muteHttpExceptions: true,
+    });
+    var code = resp.getResponseCode();
+    if (code < 200 || code >= 300) {
+      return { ok: false, error: 'The Excel flow for "' + tab + '" returned an error (HTTP ' + code + ').' };
+    }
+    return { ok: true, message: 'Saved to Excel via "' + tab + '"’s flow.' };
+  } catch (err) {
+    return { ok: false, error: 'Could not reach the Excel flow for "' + tab + '": ' + String(err) };
+  }
 }
 
 // -------------------- per-person accounts (_Users / _Sessions) --------------------
@@ -2837,6 +3117,55 @@ function getHeaderRow(sheet) {
   if (lastCol === 0) return [];
   return sheet.getRange(1, 1, 1, lastCol).getValues()[0].filter(function (v) {
     return v !== '';
+  });
+}
+
+/** Every existing row on `tabName` as a plain {rowIndex, values} object —
+ * see the getTabRows doPost action above for why this is generic across
+ * every tab rather than per-tab like getWeeklyConnectTickets. Rows that
+ * are entirely blank (a trailing gap some sheets accumulate after manual
+ * edits) are skipped rather than shown as a mystery empty card. Newest
+ * first, matching the rest of the app's list conventions. */
+function getTabRows_(tabName) {
+  var sheet = getSheetByName(tabName);
+  if (!sheet) return [];
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return [];
+
+  var headers = getHeaderRow(sheet);
+  var tz = Session.getScriptTimeZone();
+  var raw = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  var rows = [];
+  raw.forEach(function (rowValues, i) {
+    var hasContent = rowValues.some(function (v) { return v !== '' && v !== null; });
+    if (!hasContent) return;
+    var obj = {};
+    headers.forEach(function (h, ci) {
+      var v = rowValues[ci];
+      obj[h] = v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v;
+    });
+    rows.push({ rowIndex: i + 2, values: obj });
+  });
+  rows.reverse();
+  return rows;
+}
+
+/** True when every column in `expected` still matches what's actually in
+ * `currentRowValues` right now — the optimistic-concurrency check shared
+ * by updateTabRow/deleteTabRow above. TIMESTAMP_COLUMN is excluded since
+ * it's server-set and never part of what the editor was shown or could
+ * have changed. Dates are compared as formatted strings, same as
+ * elsewhere, so a Date object from the sheet matches the ISO string the
+ * client sent back. */
+function rowMatchesExpected_(headers, currentRowValues, expected) {
+  var tz = Session.getScriptTimeZone();
+  return headers.every(function (h, i) {
+    if (h === TIMESTAMP_COLUMN) return true;
+    if (!Object.prototype.hasOwnProperty.call(expected, h)) return true;
+    var cur = currentRowValues[i];
+    if (cur instanceof Date) cur = Utilities.formatDate(cur, tz, 'yyyy-MM-dd');
+    var exp = expected[h];
+    return String(cur == null ? '' : cur).trim() === String(exp == null ? '' : exp).trim();
   });
 }
 

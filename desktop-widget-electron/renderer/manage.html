@@ -324,6 +324,18 @@
       <div class="ok" id="connect-groups-ok"></div>
     </div>
 
+    <div class="section">
+      <h3>Data Sources</h3>
+      <p class="hint">Every tab saves straight to this Google Sheet by default. Point a tab at "Excel" instead to send its new entries to a Power Automate flow (which then writes them into an actual Excel file on OneDrive/SharePoint) rather than a sheet tab here — that tab still needs to exist on the Sheet so its columns/field types are defined, but its rows live in Excel instead. Existing-entries list/edit/delete isn't available yet for Excel-linked tabs — just adding new entries, for now.</p>
+      <div id="data-sources"></div>
+      <div class="row-actions">
+        <button class="secondary" id="add-data-source-btn">+ Add data source</button>
+        <button id="save-data-sources-btn">Save Data Sources</button>
+      </div>
+      <div class="err" id="data-sources-err"></div>
+      <div class="ok" id="data-sources-ok"></div>
+    </div>
+
     <button class="secondary" id="close-btn" style="width:100%;">Close</button>
   </div>
   </div>
@@ -353,6 +365,7 @@
   // [{name, tabs: [{tab, fields: [...]}], recipients: [...], scheduleDay, scheduleHour, enabled}, ...]
   let reportConfigs = [];
   let connectGroups = []; // [{name, webhookUrl}, ...]
+  let dataSources = []; // [{tab, sourceType, webhookUrl}, ...] — sourceType: 'GoogleSheet' | 'Excel'
 
   // Mirrors _FieldSchema's actual supported Type values exactly — see
   // buildFieldInput() in index.html and the _Features guide tab. '' means
@@ -400,9 +413,9 @@
     const errorMsg = document.getElementById('load-error-msg');
     errorSection.hidden = true;
 
-    let tabsRes, optsRes, fsRes, catRes, reportRes, configsRes, groupsRes;
+    let tabsRes, optsRes, fsRes, catRes, reportRes, configsRes, groupsRes, dataSourcesRes;
     try {
-      [tabsRes, optsRes, fsRes, catRes, reportRes, configsRes, groupsRes] = await Promise.all([
+      [tabsRes, optsRes, fsRes, catRes, reportRes, configsRes, groupsRes, dataSourcesRes] = await Promise.all([
         window.statusApp.getTabs(),
         window.statusApp.getOptions(),
         window.statusApp.getFieldSchema(),
@@ -410,6 +423,7 @@
         window.statusApp.getReportSettings(),
         window.statusApp.getReportConfigs(),
         window.statusApp.getConnectGroups(),
+        window.statusApp.getDataSources(),
       ]);
     } catch (err) {
       // Was a silent dead end: the gate above is already hidden and
@@ -430,12 +444,14 @@
     reportSettings = (reportRes && reportRes.reportSettings) || reportSettings;
     reportConfigs = (configsRes && configsRes.configs) || [];
     connectGroups = (groupsRes && groupsRes.groups) || [];
+    dataSources = (dataSourcesRes && dataSourcesRes.dataSources) || [];
     renderOptions();
     renderFieldSchema();
     renderCategories();
     renderReportSettings();
     renderReportConfigs();
     renderConnectGroups();
+    renderDataSources();
   }
 
   // Returns whether the save actually succeeded — most sections don't
@@ -1380,6 +1396,91 @@
       .filter((g) => g.name);
     await saveSection('save-connect-groups-btn', 'connect-groups-err', 'connect-groups-ok', () => window.statusApp.saveConnectGroups(groups));
     connectGroups = groups;
+  });
+
+  // -------------------- Data Sources --------------------
+  // Which backend a tab's new entries actually go to — Google Sheet
+  // (the default, and the only option until this existed) or Excel (via
+  // a Power Automate webhook — see postRowToExcelWebhook_ in Code.gs).
+  // Tab is a <select> off the real tab list rather than free text, same
+  // reasoning as everywhere else a value has to exactly match a real tab
+  // name: a typo here would silently misroute or drop entries instead of
+  // erroring anywhere obvious.
+
+  function buildDataSourceRow(tab, sourceType, webhookUrl) {
+    const row = document.createElement('div');
+    row.className = 'group';
+    const header = document.createElement('div');
+    header.className = 'group-header';
+
+    const tabSelect = document.createElement('select');
+    tabSelect.className = 'ds-tab-select';
+    tabSelect.style.flex = '1'; // .group-header's `input { flex: 1 }` rule doesn't reach <select>
+    const blankOpt = document.createElement('option');
+    blankOpt.value = '';
+    blankOpt.textContent = '— choose a tab —';
+    tabSelect.appendChild(blankOpt);
+    liveTabs.forEach((t) => {
+      const o = document.createElement('option');
+      o.value = t;
+      o.textContent = t;
+      if (t === tab) o.selected = true;
+      tabSelect.appendChild(o);
+    });
+
+    const typeSelect = document.createElement('select');
+    typeSelect.className = 'ds-type-select';
+    typeSelect.style.flex = '1';
+    [['GoogleSheet', 'Google Sheet'], ['Excel', 'Excel (via Power Automate)']].forEach(([val, label]) => {
+      const o = document.createElement('option');
+      o.value = val;
+      o.textContent = label;
+      if (val === (sourceType || 'GoogleSheet')) o.selected = true;
+      typeSelect.appendChild(o);
+    });
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn';
+    del.textContent = '✕ Remove';
+    del.onclick = () => row.remove();
+
+    header.appendChild(tabSelect);
+    header.appendChild(typeSelect);
+    header.appendChild(del);
+    row.appendChild(header);
+
+    const urlInput = document.createElement('input');
+    urlInput.className = 'ds-webhook-input';
+    urlInput.placeholder = 'Power Automate webhook URL (only used when Source Type is Excel)';
+    urlInput.value = webhookUrl || '';
+    urlInput.style.width = '100%';
+    row.appendChild(urlInput);
+
+    return row;
+  }
+
+  function renderDataSources() {
+    const container = document.getElementById('data-sources');
+    container.innerHTML = '';
+    dataSources.forEach((d) => container.appendChild(buildDataSourceRow(d.tab, d.sourceType, d.webhookUrl)));
+  }
+
+  document.getElementById('add-data-source-btn').addEventListener('click', () => {
+    document.getElementById('data-sources').appendChild(buildDataSourceRow('', 'Excel', ''));
+  });
+
+  document.getElementById('save-data-sources-btn').addEventListener('click', async () => {
+    const rows = Array.from(document.querySelectorAll('#data-sources .group'));
+    const sources = rows
+      .map((r) => ({
+        tab: r.querySelector('.ds-tab-select').value,
+        sourceType: r.querySelector('.ds-type-select').value,
+        webhookUrl: r.querySelector('.ds-webhook-input').value.trim(),
+      }))
+      .filter((d) => d.tab);
+    await saveSection('save-data-sources-btn', 'data-sources-err', 'data-sources-ok', () => window.statusApp.saveDataSources(sources));
+    dataSources = sources;
   });
 
   document.getElementById('close-btn').addEventListener('click', () => window.close());

@@ -486,6 +486,30 @@ ipcMain.handle('submit-entry', async (event, { tab, values }) => {
     pendingSubmitTabs.delete(tab);
   }
 });
+
+// Existing-entries list (tap a tab, see what's already there instead of a
+// blank add-entry form) — see the matching getTabRows/updateTabRow/
+// deleteTabRow actions in Code.gs for what these actually do server-side.
+ipcMain.handle('get-tab-rows', async (_e, tab) => apiPostBody({ action: 'getTabRows', tab }));
+
+ipcMain.handle('update-tab-row', async (_e, { tab, rowIndex, values, expected }) => {
+  const result = await apiPostBody({ action: 'updateTabRow', tab, rowIndex, values, expected });
+  if (result && result.ok !== false) {
+    refreshColumnsCache(tab); // e.g. so a changed "Cleanup Number" source value reflects immediately
+    checkTodayHighlights(); // editing a Leave/Holiday row can change today's banner just like a fresh submit
+  }
+  return result;
+});
+
+ipcMain.handle('delete-tab-row', async (_e, { tab, rowIndex, expected }) => {
+  const result = await apiPostBody({ action: 'deleteTabRow', tab, rowIndex, expected });
+  if (result && result.ok !== false) {
+    refreshColumnsCache(tab);
+    checkTodayHighlights();
+  }
+  return result;
+});
+
 ipcMain.handle('send-report-now', async (_e, { range, configName } = {}) =>
   apiPostBody(Object.assign({ action: 'sendReportNow', configName }, range || {}))
 );

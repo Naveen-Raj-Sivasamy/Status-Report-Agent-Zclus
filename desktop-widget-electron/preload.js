@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('statusApp', {
   postWeeklyConnectToTeamsNow: (group, range) =>
     ipcRenderer.invoke('post-weekly-connect-to-teams', { group, range }),
   submitEntry: (tab, values) => ipcRenderer.invoke('submit-entry', { tab, values }),
+  getTabRows: (tab) => ipcRenderer.invoke('get-tab-rows', tab),
+  updateTabRow: (tab, rowIndex, values, expected) =>
+    ipcRenderer.invoke('update-tab-row', { tab, rowIndex, values, expected }),
+  deleteTabRow: (tab, rowIndex, expected) =>
+    ipcRenderer.invoke('delete-tab-row', { tab, rowIndex, expected }),
   sendReportNow: (range, configName) => ipcRenderer.invoke('send-report-now', { range, configName }),
   downloadReport: (range, configName) => ipcRenderer.invoke('download-report', { range, configName }),
   getNextNumber: (tab, column) => ipcRenderer.invoke('get-next-number', { tab, column }),

@@ -39,7 +39,18 @@
     titleEl.dataset.kcLogoDone = 'true';
     const mark = document.createElement('span');
     mark.innerHTML = LOGO_SVG;
-    mark.style.cssText = 'display:inline-flex; width:20px; height:20px; margin-right:8px; vertical-align:middle; flex-shrink:0;';
+    mark.style.cssText = 'display:inline-flex; width:20px; height:20px; margin-right:8px; vertical-align:middle; flex-shrink:0; cursor:pointer;';
+    mark.title = 'Home';
+    // What "home" means is page-specific (the main popup's category
+    // landing screen vs. just closing the Manage window), so this stays
+    // page-agnostic — each page that wants the logo clickable defines
+    // window.__kcGoHome itself; a page that doesn't just gets a
+    // decorative, unclickable mark like before.
+    mark.addEventListener('click', (e) => {
+      if (typeof window.__kcGoHome !== 'function') return;
+      e.stopPropagation();
+      window.__kcGoHome();
+    });
     titleEl.insertBefore(mark, titleEl.firstChild);
   }
 

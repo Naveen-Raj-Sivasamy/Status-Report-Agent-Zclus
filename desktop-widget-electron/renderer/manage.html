@@ -339,6 +339,11 @@
 <script src="footer.js"></script>
 <script>
   document.getElementById('titlebar-close-btn').addEventListener('click', () => window.close());
+  // "Home" from a settings window just means "leave settings" — closing
+  // returns to whatever the main popup was already showing, same as the
+  // titlebar's own close button above. See footer.js's own comment on
+  // window.__kcGoHome for why this is set per-page.
+  window.__kcGoHome = () => window.close();
   let liveTabs = [];
   let optionsMap = {};
   let fieldSchemaMap = {};
@@ -352,7 +357,13 @@
   // Mirrors _FieldSchema's actual supported Type values exactly — see
   // buildFieldInput() in index.html and the _Features guide tab. '' means
   // "no row at all", i.e. plain text — never written back as a real row.
-  const FIELD_TYPES = ['', 'select', 'multiselect', 'checkbox', 'date', 'week-auto', 'sequence', 'richtext'];
+  const FIELD_TYPES = ['', 'select', 'multiselect', 'checkbox', 'date', 'week-auto', 'sequence', 'richtext', 'url', 'attachment'];
+  // Friendlier text for the two less self-explanatory types above — every
+  // other type's raw value already reads fine as its own label.
+  const FIELD_TYPE_LABELS = {
+    url: 'url (one or more links)',
+    attachment: 'attachment (SharePoint link)',
+  };
 
   async function init() {
     const hasConfig = await window.statusApp.hasConnectionConfig();
@@ -737,7 +748,7 @@
     FIELD_TYPES.forEach((t) => {
       const o = document.createElement('option');
       o.value = t;
-      o.textContent = t || '(plain text)';
+      o.textContent = FIELD_TYPE_LABELS[t] || t || '(plain text)';
       typeSel.appendChild(o);
     });
     typeSel.value = spec.type || '';

@@ -336,6 +336,24 @@
   .richtext-preview li { margin-bottom: 2px; }
   .richtext-preview br:last-child { display: none; } /* trailing <br> from the last line — avoids a dangling blank line at the bottom */
 
+  /* url / attachment fields — a repeatable list of link inputs (each is a
+     plain .field-styled <input type="url">, see the ".field input" rule
+     above), used for both types since "attachment" here just means
+     "one or more SharePoint links", not an actual file upload. */
+  .url-list-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+  .url-list-row input { flex: 1; margin: 0; }
+  .url-remove-btn {
+    background: #f0e8ea; border: none; border-radius: 6px; width: 26px; height: 26px;
+    font-size: 12px; color: var(--text); cursor: pointer; flex-shrink: 0;
+  }
+  .url-remove-btn:hover { background: #e3d5d9; }
+  .url-add-btn {
+    background: #f0e8ea; border: none; border-radius: 6px; padding: 4px 9px;
+    font-size: 12px; font-weight: 700; color: var(--text); cursor: pointer;
+    font-family: inherit;
+  }
+  .url-add-btn:hover { background: #e3d5d9; }
+
   .hidden { display: none !important; }
 </style>
 </head>
@@ -1006,6 +1024,11 @@
     }
   }
 
+  // Lets footer.js's injected logo mark act as a "Home" button — see its
+  // own comment on window.__kcGoHome for why this is set per-page instead
+  // of footer.js hardcoding what "home" means.
+  window.__kcGoHome = showCategoryPicker;
+
   // Renders one category's tab list — or, when `group.name` is `null`
   // (no _Categories configured at all, see showCategoryPicker above), the
   // full flat tab list with no "Back" button, since there's no category
@@ -1181,6 +1204,67 @@
       // above uses, since this isn't a real form control itself.
       Object.defineProperty(wrap, 'value', {
         get: () => textarea.value,
+      });
+      return wrap;
+    }
+
+    if (spec && (spec.type === 'url' || spec.type === 'attachment')) {
+      // Same field for both — "attachment" here means "one or more
+      // SharePoint document links" rather than an actual file upload (this
+      // app writes plain cell values to the Sheet, not binary files), so
+      // it only differs from "url" in the placeholder/button text below.
+      // Multiple links are stored newline-separated in the one cell —
+      // chosen over comma-separated (what multiselect uses) since a URL's
+      // own query string can legitimately contain a comma.
+      const isAttachment = spec.type === 'attachment';
+      const wrap = document.createElement('div');
+      wrap.className = 'url-list-wrap';
+      const rowsWrap = document.createElement('div');
+      wrap.appendChild(rowsWrap);
+
+      const addRow = (value) => {
+        const row = document.createElement('div');
+        row.className = 'url-list-row';
+        const input = document.createElement('input');
+        input.type = 'url';
+        input.placeholder = isAttachment ? 'Paste a SharePoint document link' : 'https://…';
+        input.value = value || '';
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'url-remove-btn';
+        del.textContent = '✕';
+        del.title = 'Remove this link';
+        del.onclick = () => row.remove();
+        row.appendChild(input);
+        row.appendChild(del);
+        rowsWrap.appendChild(row);
+      };
+
+      const existing = presetValue
+        ? presetValue.split('\n').map((s) => s.trim()).filter(Boolean)
+        : [];
+      if (existing.length) existing.forEach(addRow);
+      else addRow('');
+
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'url-add-btn';
+      addBtn.textContent = isAttachment ? '+ Add another document' : '+ Add another link';
+      addBtn.onclick = () => addRow('');
+      wrap.appendChild(addBtn);
+
+      // Give the wrapper a value-like interface so submit/draft-save
+      // collection works uniformly — same trick multiselect/richtext/
+      // checkbox above use, since this isn't a real form control itself.
+      // The 'input' listener submit/draft-save attach to this element
+      // still fires: native input events bubble up from the nested
+      // <input>s to this wrapper.
+      Object.defineProperty(wrap, 'value', {
+        get: () =>
+          Array.from(rowsWrap.querySelectorAll('input'))
+            .map((i) => i.value.trim())
+            .filter(Boolean)
+            .join('\n'),
       });
       return wrap;
     }

@@ -323,8 +323,17 @@
     }, 740); // lines up with the rocket reaching the top of rocket-launch above
   }
 
+  // Accepts both the original free-typed "boy"/"girl" and "male"/"female"
+  // (Code.gs already lowercases whatever's in the Character column) —
+  // the latter is what a Male/Female/Others dropdown option produces once
+  // that column is switched from free text to a select. "others" (or
+  // anything else, including blank) falls through to neutral, same as
+  // before.
+  const BOY_VALUES = ['boy', 'male'];
+  const GIRL_VALUES = ['girl', 'female'];
+
   function buildRunnerLane(person, laneIndex) {
-    const kind = person.character === 'boy' ? 'boy' : person.character === 'girl' ? 'girl' : 'neutral';
+    const kind = BOY_VALUES.includes(person.character) ? 'boy' : GIRL_VALUES.includes(person.character) ? 'girl' : 'neutral';
     const lane = document.createElement('div');
     lane.className = 'runner-lane';
     lane.style.bottom = (8 + laneIndex * RUNNER_LANE_HEIGHT) + 'px';

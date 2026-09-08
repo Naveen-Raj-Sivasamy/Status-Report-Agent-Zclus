@@ -776,14 +776,27 @@ ipcMain.handle('hide-window', () => hidePopup());
 // renderer measures its own content and asks us to resize to fit, on
 // every render. Clamped so it can never grow absurdly tall or shrink to
 // nothing; content beyond the max just scrolls (main already does that).
+const DEFAULT_POPUP_WIDTH = 456; // 380 +20% — same value createPopup() opens with
 const MIN_POPUP_HEIGHT = 317; // 264 +20%
 const MAX_POPUP_HEIGHT = 922; // 768 +20%
+// Set right before every one of OUR OWN popup.setSize() calls — see
+// popup.on('resize', ...) in createPopup() below, which uses this to
+// tell "we just auto-fit it" apart from "the user actually dragged a
+// corner/edge just now". Electron fires the same 'resize' event either
+// way; a short grace window after our own last resize is the practical
+// way to tell them apart, since there's no built-in flag for it.
+let lastProgrammaticPopupResizeAt = 0;
 ipcMain.on('resize-window', (_e, height) => {
   if (!popup) return;
   const clamped = Math.max(MIN_POPUP_HEIGHT, Math.min(MAX_POPUP_HEIGHT, Math.round(height)));
-  const [width, currentHeight] = popup.getSize();
-  if (clamped === currentHeight) return;
-  popup.setSize(width, clamped);
+  const [currentWidth, currentHeight] = popup.getSize();
+  // Always snaps width back to the default too, not just height — this is
+  // the "auto-fit" the manual corner-resize override (see index.html)
+  // snaps back to on the next screen, and auto-fit has only ever meant a
+  // fixed width with a content-fit height, never a remembered width.
+  if (clamped === currentHeight && currentWidth === DEFAULT_POPUP_WIDTH) return;
+  lastProgrammaticPopupResizeAt = Date.now();
+  popup.setSize(DEFAULT_POPUP_WIDTH, clamped);
   if (popup.isVisible()) {
     const refBounds = floatBtn ? floatBtn.getBounds() : tray.getBounds();
     positionPopupNearWindow(refBounds);
@@ -1097,7 +1110,18 @@ function createPopup() {
     height: 605, // 504 +20% — corrected to fit real content right after first paint — see resize-window
     show: false,
     frame: false,
-    resizable: false,
+    // Was hard-blocked to keep this purely auto-fit-to-content. Now a
+    // manual override on TOP of that: Electron gives frameless windows a
+    // real OS-level resize border/corner even with no visible chrome, so
+    // this alone is enough to let someone drag it bigger or smaller —
+    // see the 'resize' listener below for how that's told apart from our
+    // own auto-fit calls, and index.html's manualResizeActive for the
+    // renderer side of the same override.
+    resizable: true,
+    minWidth: 340,
+    minHeight: MIN_POPUP_HEIGHT,
+    maxWidth: 700,
+    maxHeight: MAX_POPUP_HEIGHT,
     fullscreenable: false,
     skipTaskbar: true,
     backgroundColor: '#00000000',
@@ -1114,6 +1138,10 @@ function createPopup() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   // Deliberately no hide-on-blur: closing is only via the ✕ button, so
   // switching to another app to look something up doesn't lose your form.
+  win.on('resize', () => {
+    if (Date.now() - lastProgrammaticPopupResizeAt < 250) return; // that was us, not a real drag
+    if (!win.webContents.isDestroyed()) win.webContents.send('window-manually-resized');
+  });
   return win;
 }
 

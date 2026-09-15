@@ -235,8 +235,22 @@ let bannerWin = null;
 // identically for everyone hitting the same backend. Fail faster instead,
 // and let the caller report retry progress so the UI can say what's
 // actually happening rather than a blank "Saving...".
+//
+// Reads (apiGet) and writes (apiPostBody) get different budgets on
+// purpose. A read always has a stale-cache fallback if it fails — so it
+// should fail fast and let the cache cover the gap. A write (saveOptions/
+// saveFieldSchema/saveCategories/etc.) has no such fallback: the ONLY
+// outcome of it timing out is reporting a hard error to someone staring at
+// "Saving...". Reported case: saveFieldSchema genuinely takes ~20s on a
+// sheet with enough formulas to trigger a full recalc on every write — well
+// past the old shared 15s, so every one of the 3 retries aborted a write
+// that was actually still succeeding server-side, turning a slow-but-real
+// success into 3 stacked false failures (worst case ~45-50s of "Saving..."
+// before an error that was never true). WRITE_TIMEOUT_MS gives a write a
+// real chance to finish before being judged as failed.
 const RETRY_ATTEMPTS = 3;
-const REQUEST_TIMEOUT_MS = 15000;
+const READ_TIMEOUT_MS = 15000;
+const WRITE_TIMEOUT_MS = 30000;
 
 async function callWithRetry(fn, { attempts = RETRY_ATTEMPTS, onRetry } = {}) {
   let lastErr;
@@ -261,7 +275,7 @@ async function apiGet(params, opts) {
   const url = new URL(config.WEBHOOK_URL);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   return callWithRetry(async () => {
-    const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     if (!data.ok) throw new Error(data.error || 'Unknown API error');
@@ -283,7 +297,7 @@ async function apiPostBody(body, opts) {
     const resp = await fetch(config.WEBHOOK_URL, {
       method: 'POST',
       body: JSON.stringify(Object.assign({ token: config.TOKEN, sessionToken }, body)),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
@@ -334,6 +348,19 @@ let optionsCache = null; // dropdown/multiselect option lists from the _Options 
 let fieldSchemaCache = null; // which fields get which widget type, from the _FieldSchema tab
 let categoriesCache = offlineCache.categoriesCache || null; // landing-screen tab grouping, from the _Categories tab
 let dataSourceTypesCache = null; // {tab: 'Excel'} for non-default tabs only — see _DataSources in Code.gs
+// The Manage screen's own admin-only reads. Unlike the caches above, these
+// carry sensitive data (webhook URLs, recipient emails) so they're never
+// touched by prefetchAll() below — nothing fetches them until the admin
+// actually opens the Manage screen and asks for one. But once that first
+// live read happens, every REPEAT open within the same running app should
+// be instant, same stale-while-revalidate idea as tabsCache/optionsCache —
+// these four used to skip that entirely and hit the backend fresh on every
+// single open, which is what made "waited a minute, closed and reopened,
+// waited another minute" true even the second time.
+let dataSourcesCache = null; // full detail (webhook URLs) — Manage's Data Sources editor
+let reportConfigsCache = null;
+let reportSettingsCache = null;
+let connectGroupsCache = null;
 
 async function refreshTabsCache() {
   try {
@@ -403,6 +430,50 @@ async function refreshDataSourceTypesCache() {
   }
 }
 
+// Admin-only, apiPostBody-based — see the comment on dataSourcesCache etc.
+// above for why these stay out of prefetchAll() but still get the same
+// cache-then-refresh treatment as everything else once first requested.
+async function refreshDataSourcesCache() {
+  try {
+    const data = await apiPostBody({ action: 'getDataSources' });
+    dataSourcesCache = data;
+    return data;
+  } catch (err) {
+    if (dataSourcesCache) return dataSourcesCache;
+    throw err;
+  }
+}
+async function refreshReportConfigsCache() {
+  try {
+    const data = await apiPostBody({ action: 'getReportConfigs' });
+    reportConfigsCache = data;
+    return data;
+  } catch (err) {
+    if (reportConfigsCache) return reportConfigsCache;
+    throw err;
+  }
+}
+async function refreshReportSettingsCache() {
+  try {
+    const data = await apiPostBody({ action: 'getReportSettings' });
+    reportSettingsCache = data;
+    return data;
+  } catch (err) {
+    if (reportSettingsCache) return reportSettingsCache;
+    throw err;
+  }
+}
+async function refreshConnectGroupsCache() {
+  try {
+    const data = await apiPostBody({ action: 'getConnectGroups' });
+    connectGroupsCache = data;
+    return data;
+  } catch (err) {
+    if (connectGroupsCache) return connectGroupsCache;
+    throw err;
+  }
+}
+
 function prefetchAll() {
   refreshTabsCache()
     .then((data) => Promise.all((data.tabs || []).map((t) => refreshColumnsCache(t))))
@@ -467,13 +538,20 @@ ipcMain.handle('get-data-source-types', async () => {
 });
 // Admin-only, full detail (webhook URLs included) — the Manage screen's
 // Data Sources editor. Separate from the lightweight get-data-source-types
-// above the same way getConnectGroups/get-connect-groups already is:
-// this always hits the backend fresh, no in-memory cache, since it's only
-// opened rarely and needs to reflect exactly what's saved right now.
-ipcMain.handle('get-data-sources', async () => apiPostBody({ action: 'getDataSources' }));
+// above the same way getConnectGroups/get-connect-groups already is.
+// Cache-then-refresh like everything else — see dataSourcesCache's comment
+// above for why the first-ever open still pays for a live round trip.
+ipcMain.handle('get-data-sources', async () => {
+  if (dataSourcesCache) {
+    refreshDataSourcesCache();
+    return dataSourcesCache;
+  }
+  return refreshDataSourcesCache();
+});
 ipcMain.handle('save-data-sources', async (_e, dataSources) => {
   const result = await apiPostBody({ action: 'saveDataSources', dataSources });
   dataSourceTypesCache = null; // saved data may have just changed which tabs are Excel-routed
+  dataSourcesCache = null;
   return result;
 });
 // Real risk this closes: when a save is genuinely slow (e.g. a large
@@ -549,10 +627,17 @@ ipcMain.handle('send-report-now', async (_e, { range, configName } = {}) =>
 // Report Configs — the generalized, multi-report replacement for the old
 // single hardcoded ReportTabs/ReportRecipients setup. Same token-gated
 // doPost reasoning as saveOptions/saveFieldSchema/saveReportSettings.
-ipcMain.handle('get-report-configs', async () => apiPostBody({ action: 'getReportConfigs' }));
+ipcMain.handle('get-report-configs', async () => {
+  if (reportConfigsCache) {
+    refreshReportConfigsCache();
+    return reportConfigsCache;
+  }
+  return refreshReportConfigsCache();
+});
 ipcMain.handle('save-report-configs', async (_e, configs) => {
   const result = await apiPostBody({ action: 'saveReportConfigs', configs });
   tabsCache = null; // a config's own tab list isn't the widget's tab list, but cheap/safe to refresh alongside it
+  reportConfigsCache = null;
   return result;
 });
 ipcMain.handle('clear-cache', async () => {
@@ -567,6 +652,11 @@ ipcMain.handle('clear-cache', async () => {
   optionsCache = null;
   fieldSchemaCache = null;
   categoriesCache = null;
+  dataSourceTypesCache = null;
+  dataSourcesCache = null;
+  reportConfigsCache = null;
+  reportSettingsCache = null;
+  connectGroupsCache = null;
   return result;
 });
 // Powers the in-app "Manage Fields & Options" screen — each just posts the
@@ -592,14 +682,21 @@ ipcMain.handle('save-categories', async (_e, categories) => {
 // Report settings (ReportTabs/HiddenTabs/ReportRecipients/
 // ReminderRecipients) go through doPost on the backend, not doGet like
 // tabs/options/fieldSchema/categories — see the comment on doGet's
-// 'getReportSettings' omission in Code.gs. No in-memory cache here either:
-// this screen is opened rarely enough that a live read each time is fine,
-// and there's nothing else in this process that reads these values to
-// keep in sync.
-ipcMain.handle('get-report-settings', async () => apiPostBody({ action: 'getReportSettings' }));
+// 'getReportSettings' omission in Code.gs. Cache-then-refresh like the rest
+// of Manage now (see reportSettingsCache's comment above) — a live read
+// still happens the first time this screen is opened, but repeat opens in
+// the same run no longer each pay for their own round trip.
+ipcMain.handle('get-report-settings', async () => {
+  if (reportSettingsCache) {
+    refreshReportSettingsCache();
+    return reportSettingsCache;
+  }
+  return refreshReportSettingsCache();
+});
 ipcMain.handle('save-report-settings', async (_e, settings) => {
   const result = await apiPostBody({ action: 'saveReportSettings', settings });
   tabsCache = null; // HiddenTabs can change which tabs the widget shows
+  reportSettingsCache = null;
   return result;
 });
 // One-click version of running cleanupWeeklyConnectAndLeaveTabs() from the
@@ -615,6 +712,11 @@ ipcMain.handle('cleanup-weekly-connect-and-leave-tabs', async () => {
   optionsCache = null;
   fieldSchemaCache = null;
   categoriesCache = null;
+  dataSourceTypesCache = null;
+  dataSourcesCache = null;
+  reportConfigsCache = null;
+  reportSettingsCache = null;
+  connectGroupsCache = null;
   return result;
 });
 // Renames a real sheet tab and rewrites every reference to its old name
@@ -629,6 +731,11 @@ ipcMain.handle('rename-tab', async (_e, { oldName, newName }) => {
   optionsCache = null;
   fieldSchemaCache = null;
   categoriesCache = null;
+  dataSourceTypesCache = null;
+  dataSourcesCache = null;
+  reportConfigsCache = null;
+  reportSettingsCache = null;
+  connectGroupsCache = null;
   return result;
 });
 // The footer "Contact Admin" form every screen carries — no cache to
@@ -644,11 +751,19 @@ ipcMain.handle('submit-admin-contact', async (_e, payload) =>
 // (a webhook URL is a write capability). Group names are synced into
 // _Options server-side, so a save here also invalidates this process's
 // options cache — otherwise the ticket form's Group dropdown would keep
-// showing whatever list was cached before the edit.
-ipcMain.handle('get-connect-groups', async () => apiPostBody({ action: 'getConnectGroups' }));
+// showing whatever list was cached before the edit. Cache-then-refresh
+// like the rest of Manage now — see reportSettingsCache's comment above.
+ipcMain.handle('get-connect-groups', async () => {
+  if (connectGroupsCache) {
+    refreshConnectGroupsCache();
+    return connectGroupsCache;
+  }
+  return refreshConnectGroupsCache();
+});
 ipcMain.handle('save-connect-groups', async (_e, groups) => {
   const result = await apiPostBody({ action: 'saveConnectGroups', groups });
   optionsCache = null;
+  connectGroupsCache = null;
   return result;
 });
 // Weekly Connect's ticket list — same reasoning as report settings above

@@ -39,7 +39,16 @@
     titleEl.dataset.kcLogoDone = 'true';
     const mark = document.createElement('span');
     mark.innerHTML = LOGO_SVG;
-    mark.style.cssText = 'display:inline-flex; width:20px; height:20px; margin-right:8px; vertical-align:middle; flex-shrink:0; cursor:pointer;';
+    // -webkit-app-region:no-drag is the actual fix here — both index.html's
+    // <header> and manage.html's .titlebar are drag regions (move the
+    // window by its title bar), and only their own explicit buttons carve
+    // themselves out of that with their own no-drag. This mark sits inside
+    // that same title element with no such exclusion, so Electron was
+    // treating every click on it as a potential window-drag and swallowing
+    // it before it ever reached the listener below — same class of bug the
+    // floating icon itself already needed this exact fix for (see
+    // main.js's float-btn-set-ignore-mouse comment).
+    mark.style.cssText = 'display:inline-flex; width:20px; height:20px; margin-right:8px; vertical-align:middle; flex-shrink:0; cursor:pointer; -webkit-app-region:no-drag;';
     mark.title = 'Home';
     // What "home" means is page-specific (the main popup's category
     // landing screen vs. just closing the Manage window), so this stays

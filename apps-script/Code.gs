@@ -1541,6 +1541,7 @@ function listVisibleTabsUncached() {
   ensureWeeklyConnectTab();
   ensureFeaturesTab();
   ensureDataSourcesTab();
+  ensureKeepAliveTrigger_();
   var hiddenTabs = getHiddenTabs();
   return SpreadsheetApp.getActiveSpreadsheet()
     .getSheets()
@@ -3616,6 +3617,65 @@ function ensureTodayHighlightsTrigger_() {
   });
   ScriptApp.newTrigger('postTodayHighlightsToTeams').timeBased().everyDays(1).atHour(hour).create();
   Logger.log('Today-highlights Teams trigger installed for ' + hour + ':00 (script timezone).');
+}
+
+// -------------------- keep the spreadsheet "warm" --------------------
+//
+// Google Sheets defers the expensive part of recalculating a workbook's
+// formulas while it sits untouched — the next thing that actually
+// touches it (opening it in the browser, or here, any SpreadsheetApp
+// call from Apps Script) has to pay for that whole deferred
+// recalculation in one go before it can respond to anything at all,
+// reads included. Reported case (2026-09): a user opening the app after
+// it had sat idle overnight got "get the sheet failed" timeouts for a
+// full 30 minutes — every request, GET or POST, blocked the entire
+// time. Confirmed this wasn't anything this app's own LockService/
+// CacheService touches (clearing the app's own cache did nothing,
+// which makes sense — this is Sheets' own internal state, not ours),
+// and confirmed neither of the two existing scheduled jobs
+// (postTodayHighlightsToTeams, runScheduledReports_) was the cause —
+// neither holds a lock or does real work most hours. Only explanation
+// left that fits "only after a day idle, lasts tens of minutes,
+// unaffected by the app's cache" is Sheets' own cold-recalculation
+// behavior, worse the longer it sat and the more formulas the workbook
+// has accumulated.
+//
+// The fix: never let the workbook go idle long enough to need that
+// catch-up. A trivial touch every 15 minutes — reading one cell — is
+// enough to count as "touched" and keep Sheets' calculated state
+// current, without doing any real work of its own. Runs around the
+// clock (not just business hours) since the whole point is that the
+// FIRST person to open the app in the morning should never be the one
+// who pays for an overnight cold start.
+var KEEP_ALIVE_TRIGGER_FN = 'keepSheetWarm_';
+
+function keepSheetWarm_() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(CONFIG_TAB_NAME) || ss.getSheets()[0];
+    sheet.getRange('A1').getValue(); // the read itself is the point, not the value
+    SpreadsheetApp.flush();
+  } catch (err) {
+    Logger.log('keepSheetWarm_ failed: ' + err);
+  }
+}
+
+/** Self-healing like ensureLeaveTab/ensureOptionsTab/etc. above — called
+ * from listVisibleTabsUncached() so it installs itself the first time
+ * anything asks for the tab list after this ships, no manual one-time
+ * run needed. Safe to call repeatedly: only ever creates the trigger if
+ * it's missing. everyMinutes() only accepts 1/5/10/15/30 — 15 is
+ * frequent enough to keep the workbook from ever going fully cold
+ * without being wasteful (96 runs/day, trivial against Apps Script's
+ * daily trigger-execution quota). */
+function ensureKeepAliveTrigger_() {
+  var exists = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === KEEP_ALIVE_TRIGGER_FN;
+  });
+  if (!exists) {
+    ScriptApp.newTrigger(KEEP_ALIVE_TRIGGER_FN).timeBased().everyMinutes(15).create();
+    Logger.log('Keep-alive trigger installed (every 15 minutes).');
+  }
 }
 
 // -------------------- Report Configs (multiple, independent reports) --------------------

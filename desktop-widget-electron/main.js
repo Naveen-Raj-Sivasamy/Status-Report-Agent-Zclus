@@ -759,6 +759,17 @@ ipcMain.handle('log-navigation', async (_e, tab) =>
   apiPostBody({ action: 'logNavigation', tab, idempotencyKey: crypto.randomUUID() }).catch(() => {})
 );
 ipcMain.handle('get-audit-log', async () => apiPostBody({ action: 'getAuditLog' }));
+// New "CMS Weekly Connect" flow — one meeting = one row, every query for
+// it folded into the Queries cell server-side (see submitCmsWeeklyConnect
+// in Code.gs). No cache to invalidate: like submitAdminContact, this only
+// ever appends a row, and nothing else this process caches reads from
+// that tab. idempotencyKey follows the same reasoning as every other
+// write here — generated once per click, reused across this click's own
+// automatic retries, so a slow-but-eventually-successful backend can't
+// turn one submission into two rows for the same meeting.
+ipcMain.handle('submit-cms-weekly-connect', async (_e, payload) =>
+  apiPostBody(Object.assign({ action: 'submitCmsWeeklyConnect', idempotencyKey: crypto.randomUUID() }, payload))
+);
 // Connect Groups — same doPost/token-gated reasoning as report settings
 // (a webhook URL is a write capability). Group names are synced into
 // _Options server-side, so a save here also invalidates this process's

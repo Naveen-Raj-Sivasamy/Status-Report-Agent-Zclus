@@ -620,6 +620,80 @@ function doPost(e) {
       return jsonOut({ ok: true, message: 'Sent to admin(s) and logged.' });
     }
 
+    /** New "CMS Weekly Connect" flow — one row per MEETING, not per
+     * ticket: every query/answer/status/assignee for that meeting gets
+     * folded into one rich-text Queries cell (see buildCmsQueriesRichText_
+     * above) instead of one row each. Column D (Assigned To) is
+     * deliberately never written — see that function's own comment for
+     * why. One-and-done by design, same as the user asked for: unlike
+     * updateWeeklyConnectTicket right below, there's no matching "edit an
+     * already-submitted row" action for this tab. */
+    if (body.action === 'submitCmsWeeklyConnect') {
+      var cmsRequester = String(body.requester || '').trim();
+      var cmsMeetingDate = body.meetingDate || '';
+      var cmsQueries = (Array.isArray(body.queries) ? body.queries : []).filter(function (q) {
+        return q && String(q.query || '').trim();
+      });
+      if (!cmsRequester) return jsonOut({ ok: false, error: 'Requester is required.' });
+      if (!cmsMeetingDate) return jsonOut({ ok: false, error: 'Meeting Date is required.' });
+      if (!cmsQueries.length) return jsonOut({ ok: false, error: 'Add at least one query.' });
+
+      // Same idempotency reasoning as submitAdminContact above — a retry
+      // of this click must never append the same meeting's queries twice.
+      var cmsIdemKey = body.idempotencyKey ? 'submitCmsWeeklyConnect:' + String(body.idempotencyKey).trim() : '';
+      var cmsIdemCache = CacheService.getScriptCache();
+      if (cmsIdemKey) {
+        var cmsAlreadyDone = cmsIdemCache.get(cmsIdemKey);
+        if (cmsAlreadyDone) return ContentService.createTextOutput(cmsAlreadyDone).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      var cmsLock = LockService.getScriptLock();
+      if (!cmsLock.tryLock(LOCK_WAIT_MS)) {
+        logAudit_(body.sessionToken, 'submit', CMS_WEEKLY_CONNECT_TAB_NAME, 'Server busy — lock timeout.', 'Failed');
+        return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
+      }
+      var cmsResult;
+      try {
+        if (cmsIdemKey) {
+          var cmsAlreadyDoneInLock = cmsIdemCache.get(cmsIdemKey);
+          if (cmsAlreadyDoneInLock) return ContentService.createTextOutput(cmsAlreadyDoneInLock).setMimeType(ContentService.MimeType.JSON);
+        }
+        var cmsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CMS_WEEKLY_CONNECT_TAB_NAME);
+        if (!cmsSheet) {
+          cmsResult = { ok: false, error: 'No "' + CMS_WEEKLY_CONNECT_TAB_NAME + '" tab found on the sheet.' };
+        } else {
+          var cmsHeaders = getHeaderRow(cmsSheet);
+          var cmsDateIdx = findColumnIndex(cmsHeaders, 'Meeting Date');
+          var cmsReqIdx = findColumnIndex(cmsHeaders, 'Requester');
+          var cmsQIdx = findColumnIndex(cmsHeaders, 'Queries');
+          if (cmsDateIdx === -1 || cmsReqIdx === -1 || cmsQIdx === -1) {
+            cmsResult = { ok: false, error: 'The "' + CMS_WEEKLY_CONNECT_TAB_NAME + '" tab is missing a Meeting Date, Requester, or Queries column.' };
+          } else {
+            // Plain columns only — Assigned To (or anything else on this
+            // row) is deliberately left blank; see this action's own
+            // comment above.
+            var cmsRow = cmsHeaders.map(function (col, idx) {
+              if (idx === cmsDateIdx) return cmsMeetingDate;
+              if (idx === cmsReqIdx) return cmsRequester;
+              return '';
+            });
+            cmsSheet.appendRow(cmsRow);
+            cmsSheet.getRange(cmsSheet.getLastRow(), cmsQIdx + 1).setRichTextValue(buildCmsQueriesRichText_(cmsQueries));
+            cmsResult = { ok: true, message: 'Saved to "' + CMS_WEEKLY_CONNECT_TAB_NAME + '".' };
+          }
+        }
+        if (cmsIdemKey) cmsIdemCache.put(cmsIdemKey, JSON.stringify(cmsResult), 300);
+      } finally {
+        cmsLock.releaseLock();
+      }
+      logAudit_(
+        body.sessionToken, 'submit', CMS_WEEKLY_CONNECT_TAB_NAME,
+        cmsResult.ok ? (cmsQueries.length + ' quer' + (cmsQueries.length === 1 ? 'y' : 'ies') + ' from ' + cmsRequester) : (cmsResult.error || 'Submit failed.'),
+        cmsResult.ok ? 'Success' : 'Failed'
+      );
+      return jsonOut(cmsResult);
+    }
+
     /** Updates one Weekly Connect ticket's Status/Comments in place — the
      * one write in this whole app that edits an existing row instead of
      * appending. Lock-guarded like every other write, so two people
@@ -1716,6 +1790,73 @@ function findDailyStatusTicketConflict_(headers, sheet, values, excludeRowIndex)
     if (String(idValues[i][0] || '').trim().toLowerCase() === target) return true;
   }
   return false;
+}
+
+// --------------------- CMS Weekly Connect ------------------------------
+// The user restructured their own Weekly Connect tab by hand: renamed it
+// to "CMS Weekly Connect" and cut it down to just Meeting Date / Requester
+// / Queries / Assigned To, wanting ONE row per meeting (every query that
+// week folded into a single cell) instead of one row per ticket — see
+// submitCmsWeeklyConnect in doPost below for the actual write.
+//
+// Deliberately NOT following the ensureLeaveTab()/ensureWeeklyConnectTab()
+// self-creating pattern: this tab already exists, hand-styled (colored
+// header row, column widths) by the user, and re-running a header-writing
+// "ensure" against it on every tab-list read would risk clobbering that
+// styling for no real benefit. submitCmsWeeklyConnect just looks the tab
+// up by name and returns a clear error if it's ever missing.
+var CMS_WEEKLY_CONNECT_TAB_NAME = 'CMS Weekly Connect';
+
+// Answer color per query Status, Google's own Material palette so each
+// reads clearly on the sheet's white background (plain #ffff00 "yellow"
+// is nearly invisible there). A status that's blank or doesn't match
+// falls back to black rather than throwing.
+var CMS_STATUS_COLORS_ = { Done: '#188038', Pending: '#d93025', 'In Progress': '#f9ab00' };
+
+/** Builds the single RichTextValue that goes in one "CMS Weekly Connect"
+ * row's Queries cell: every query for that meeting, numbered, with one
+ * blank line between entries, the question in bold, a colon, then the
+ * answer colored per its own Status (see CMS_STATUS_COLORS_ above), and —
+ * only when that query actually has one — an inline "— Assigned: Name"
+ * suffix. That inline suffix is the whole reason Column D (Assigned To)
+ * never gets written by submitCmsWeeklyConnect: the user asked for each
+ * query's assignee to live inside this cell's own text instead of one
+ * Assigned To value for the whole row, which wouldn't even make sense
+ * once a single row can hold several queries assigned to different
+ * people. Caller is expected to have already dropped any fully-blank
+ * (no Query text) entries — see submitCmsWeeklyConnect. */
+function buildCmsQueriesRichText_(queries) {
+  var text = '';
+  var runs = [];
+  queries.forEach(function (q, i) {
+    var query = String(q.query || '').trim();
+    var answer = String(q.answer || '').trim();
+    var status = String(q.status || '').trim();
+    var assignedTo = String(q.assignedTo || '').trim();
+
+    text += (i + 1) + '. ';
+    var boldStart = text.length;
+    text += query;
+    runs.push({ start: boldStart, end: text.length, bold: true });
+
+    text += ': ';
+    var colorStart = text.length;
+    text += answer;
+    runs.push({ start: colorStart, end: text.length, color: CMS_STATUS_COLORS_[status] || '#000000' });
+
+    if (assignedTo) text += ' — Assigned: ' + assignedTo;
+    if (i < queries.length - 1) text += '\n\n';
+  });
+
+  var builder = SpreadsheetApp.newRichTextValue().setText(text);
+  runs.forEach(function (r) {
+    if (r.end <= r.start) return; // blank query or answer on this entry — nothing to style
+    var style = SpreadsheetApp.newTextStyle();
+    if (r.bold) style.setBold(true);
+    if (r.color) style.setForegroundColor(r.color);
+    builder.setTextStyle(r.start, r.end, style.build());
+  });
+  return builder.build();
 }
 
 // ------------------------- Weekly Connect ----------------------------

@@ -278,6 +278,15 @@
   .badge.priority-medium { background: #fdecc8; color: #8a5a1e; }
   .badge.priority-low { background: #ece5e6; color: #6b5a56; }
   .badge.stale { background: #a13a3a; color: #ffffff; }
+  /* Running day-count for an Open Weekly Connect ticket — shown for every
+     Open ticket, not just ones already past STALE_TICKET_DAYS (the
+     existing red "Stale" badge above still fires at that point too; this
+     is the earlier, graduated signal so aging shows up before a ticket
+     ever reaches Stale). Thresholds are cosmetic only — nothing else
+     changes based on them, same "nudge, not a rule" spirit as Stale. */
+  .badge.aging-fresh { background: #d9f3e3; color: #1e6b3e; }
+  .badge.aging-warn { background: #fdecc8; color: #8a5a1e; }
+  .badge.aging-late { background: #fbdada; color: #a13a3a; }
   .wc-empty { text-align: center; color: var(--on-brand-dim); font-size: 12px; padding: 24px 0; }
   .wc-filter-row { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
   .wc-filter-btn {
@@ -365,6 +374,24 @@
   }
   .badge.log-success { background: #d9f3e3; color: #1e6b3e; }
   .badge.log-failed { background: #fbdada; color: #a13a3a; }
+
+  /* CMS Weekly Connect — the repeatable query/answer/status/assignee
+     blocks on the new multi-query submit form (see showCmsWeeklyConnectForm). */
+  .cms-query-block {
+    position: relative; background: var(--surface); border-radius: 12px;
+    padding: 12px 34px 4px 12px; margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  }
+  .cms-remove-btn {
+    position: absolute; top: 8px; right: 8px; width: 22px; height: 22px;
+    border: none; border-radius: 50%; background: #f1e9d8; color: var(--text-dim);
+    font-size: 12px; line-height: 1; cursor: pointer; font-family: inherit;
+  }
+  .cms-remove-btn:hover { background: #e6dcc3; color: var(--text); }
+  .cms-error {
+    background: #fbdada; color: #a13a3a; font-size: 12px; font-weight: 600;
+    border-radius: 9px; padding: 8px 10px; margin-bottom: 10px;
+  }
 
   /* richtext field — a formatting toolbar over a plain textarea (stores
      Markdown, not HTML — see the comment in buildFieldInput()). Overrides
@@ -467,6 +494,14 @@
   // and the edit-in-place flow are specific to it, not generic behavior
   // every tab gets.
   const WEEKLY_CONNECT_TAB = 'Weekly_Connect';
+
+  // The user's own redesigned tab — one row per MEETING (every query that
+  // week folded into the Queries cell), not one row per ticket. Routed
+  // straight to its own custom multi-query form below (showCmsWeeklyConnectForm),
+  // same "recognize this tab by name" pattern as WEEKLY_CONNECT_TAB above,
+  // but with no generic Add-Entry form and no entries list at all — it's
+  // one-and-done by design (see submitCmsWeeklyConnect in Code.gs).
+  const CMS_WEEKLY_CONNECT_TAB = 'CMS Weekly Connect';
 
   let yourName = '';
   // Dropdown/multiselect option lists from the _Options sheet tab, fetched
@@ -1006,8 +1041,15 @@
       <div class="field">
         <input type="text" id="log-search-input" placeholder="Search user, action, tab, or summary…">
       </div>
+      <div class="field wc-date-row">
+        <input type="date" id="log-date-from" title="From date">
+        <input type="date" id="log-date-to" title="To date">
+      </div>
       <div id="log-rows-host"></div>
-      <button type="button" class="secondary" id="log-refresh-btn" style="width:100%; margin-top:4px;">⟳ Refresh</button>
+      <div style="display:flex; gap:8px; margin-top:4px;">
+        <button type="button" class="secondary" id="log-refresh-btn" style="flex:1;">⟳ Refresh</button>
+        <button type="button" class="secondary" id="log-export-btn" style="flex:1;">⬇ Export CSV</button>
+      </div>
       <button type="button" class="secondary" id="log-back-btn" style="width:100%; margin-top:8px;">← Back</button>
     `;
 
@@ -1023,21 +1065,43 @@
     });
 
     document.getElementById('log-search-input').oninput = () => renderLogRows();
+    document.getElementById('log-date-from').onchange = () => renderLogRows();
+    document.getElementById('log-date-to').onchange = () => renderLogRows();
     document.getElementById('log-refresh-btn').onclick = () => showLogAnalyser();
+    document.getElementById('log-export-btn').onclick = () => exportLogRowsCsv();
     document.getElementById('log-back-btn').onclick = showSettings;
 
     renderLogRows();
   }
 
+  // Rows currently on screen (after status/search/date filtering) — kept
+  // at this scope so the Export CSV button can read exactly what's
+  // visible without recomputing the filter or re-fetching from the
+  // server.
+  let logAnalyserFilteredRows = [];
+
   function renderLogRows() {
     const searchInput = document.getElementById('log-search-input');
     const search = (searchInput ? searchInput.value : '').trim().toLowerCase();
+    const fromInput = document.getElementById('log-date-from');
+    const toInput = document.getElementById('log-date-to');
+    const fromDate = fromInput && fromInput.value ? fromInput.value : null;
+    const toDate = toInput && toInput.value ? toInput.value : null;
+
     const filtered = logAnalyserRows.filter((r) => {
       if (logAnalyserStatusFilter === 'failed' && String(r.status).toLowerCase() !== 'failed') return false;
       if (logAnalyserStatusFilter === 'success' && String(r.status).toLowerCase() === 'failed') return false;
+      // r.timestamp is "yyyy-MM-dd HH:mm:ss" from the server — its first
+      // 10 characters are already an ISO date, so a plain string compare
+      // against the <input type="date"> value (also yyyy-MM-dd) works
+      // with no parsing.
+      const rowDate = String(r.timestamp || '').slice(0, 10);
+      if (fromDate && rowDate < fromDate) return false;
+      if (toDate && rowDate > toDate) return false;
       if (!search) return true;
       return [r.username, r.action, r.tab, r.summary].some((v) => String(v || '').toLowerCase().includes(search));
     });
+    logAnalyserFilteredRows = filtered;
 
     const host = document.getElementById('log-rows-host');
     host.innerHTML = '';
@@ -1049,6 +1113,36 @@
     } else {
       filtered.forEach((r) => host.appendChild(buildLogCard(r)));
     }
+  }
+
+  // CSV of exactly what's currently visible (status pill + search + date
+  // range already applied) — an admin narrowing down to one failed action
+  // or one week gets a file matching what they were just looking at, not
+  // the whole 1000-row window every time.
+  function exportLogRowsCsv() {
+    if (!logAnalyserFilteredRows.length) {
+      window.alert('Nothing to export — adjust the filters first.');
+      return;
+    }
+    const escapeCsv = (v) => {
+      const s = String(v == null ? '' : v);
+      return /["\n,]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const headerRow = ['Timestamp', 'Username', 'Action', 'Tab', 'Summary', 'Status'];
+    const lines = [headerRow.join(',')].concat(
+      logAnalyserFilteredRows.map((r) =>
+        [r.timestamp, r.username, r.action, r.tab, r.summary, r.status].map(escapeCsv).join(',')
+      )
+    );
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `activity-log-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   function buildLogCard(r) {
@@ -1248,6 +1342,7 @@
       const skipEntriesList = tab === WEEKLY_CONNECT_TAB || liveDataSourceTypes[tab] === 'Excel';
       btn.onclick = () => {
         window.statusApp.logNavigation(tab).catch(() => {});
+        if (tab === CMS_WEEKLY_CONNECT_TAB) return showCmsWeeklyConnectForm();
         return skipEntriesList ? showForm(tab) : showTabEntries(tab);
       };
       els.main.appendChild(btn);
@@ -1627,6 +1722,104 @@
     }
   }
 
+  // ---------------- CMS Weekly Connect: multi-query submit form ----------------
+  // Replaces the old one-ticket-per-row Weekly Connect flow for this tab
+  // entirely (see showTabPicker's routing above) — no entries list, no
+  // per-row edit screen, no Post-to-Teams: this tab is one-and-done, all
+  // of a meeting's queries submitted together as one row (see
+  // submitCmsWeeklyConnect in Code.gs for how they're combined server-side).
+
+  // One repeatable query/answer/status/assignee block. Kept as a plain DOM
+  // builder (not wired into the generic buildFieldInput()/draft-saving
+  // machinery showForm() uses) since this shape — a variable-length list
+  // of these — is specific to this one tab, not a generic column.
+  function buildCmsQueryBlock() {
+    const block = document.createElement('div');
+    block.className = 'cms-query-block';
+    block.innerHTML = `
+      <button type="button" class="cms-remove-btn" title="Remove this query">✕</button>
+      <div class="field"><label>Query</label><textarea class="cms-q-query" rows="2"></textarea></div>
+      <div class="field"><label>Answer</label><textarea class="cms-q-answer" rows="2"></textarea></div>
+      <div class="field"><label>Status</label>
+        <select class="cms-q-status">
+          <option value="Pending">Pending</option>
+          <option value="In Progress">In Progress</option>
+          <option value="Done">Done</option>
+        </select>
+      </div>
+      <div class="field"><label>Assigned To <span style="font-weight:400;">(optional)</span></label><input type="text" class="cms-q-assigned" /></div>
+    `;
+    block.querySelector('.cms-remove-btn').onclick = () => {
+      block.remove();
+      // Never leave the form with zero blocks showing — nothing to
+      // remove-down-to-nothing, there's just always at least one to fill in.
+      const list = document.getElementById('cms-query-list');
+      if (list && !list.children.length) list.appendChild(buildCmsQueryBlock());
+    };
+    return block;
+  }
+
+  function showCmsWeeklyConnectForm() {
+    els.sub.textContent = CMS_WEEKLY_CONNECT_TAB;
+    els.reportActions.classList.add('hidden');
+    els.main.style.minHeight = '';
+    els.main.innerHTML = `
+      <div class="cms-error" id="cms-error" style="display:none;"></div>
+      <div class="field"><label>Meeting Date</label><input type="date" id="cms-meeting-date" /></div>
+      <div class="field"><label>Requester</label><input type="text" id="cms-requester" placeholder="Who requested this?" /></div>
+      <div id="cms-query-list"></div>
+      <button type="button" class="secondary" id="cms-add-query-btn" style="width:100%; margin:6px 0 2px;">+ Add Query</button>
+    `;
+    const list = document.getElementById('cms-query-list');
+    list.appendChild(buildCmsQueryBlock());
+    document.getElementById('cms-add-query-btn').onclick = () => list.appendChild(buildCmsQueryBlock());
+    // Defaults to today — the meeting this is almost always being filled
+    // in right after, same reasoning as auto-numbered/auto-week fields
+    // elsewhere saving a step for the common case.
+    document.getElementById('cms-meeting-date').value = new Date().toISOString().slice(0, 10);
+
+    const errBox = document.getElementById('cms-error');
+    const showCmsError = (msg) => { errBox.textContent = msg; errBox.style.display = 'block'; };
+    const hideCmsError = () => { errBox.style.display = 'none'; };
+
+    els.footer.classList.remove('hidden');
+    els.submitBtn.disabled = false;
+    els.submitBtn.textContent = 'Submit';
+    els.cancelBtn.onclick = () => showTabPicker();
+
+    els.submitBtn.onclick = async () => {
+      hideCmsError();
+      const requester = document.getElementById('cms-requester').value.trim();
+      const meetingDate = document.getElementById('cms-meeting-date').value;
+      const queries = Array.from(document.querySelectorAll('#cms-query-list .cms-query-block')).map((b) => ({
+        query: b.querySelector('.cms-q-query').value.trim(),
+        answer: b.querySelector('.cms-q-answer').value.trim(),
+        status: b.querySelector('.cms-q-status').value,
+        assignedTo: b.querySelector('.cms-q-assigned').value.trim(),
+      })).filter((q) => q.query);
+
+      // Validated inline, without wiping the form — showError()'s "Retry"
+      // re-renders a blank screen, which would be a rough way to lose
+      // several already-typed queries over one missing field.
+      if (!requester) return showCmsError('Requester is required.');
+      if (!meetingDate) return showCmsError('Meeting Date is required.');
+      if (!queries.length) return showCmsError('Add at least one query (with its Query field filled in).');
+
+      els.submitBtn.disabled = true;
+      els.submitBtn.textContent = 'Saving…';
+      try {
+        await window.statusApp.submitCmsWeeklyConnect({ meetingDate, requester, queries });
+        els.submitBtn.disabled = false;
+        els.submitBtn.textContent = 'Submit';
+        showSuccess(CMS_WEEKLY_CONNECT_TAB);
+      } catch (err) {
+        els.submitBtn.disabled = false;
+        els.submitBtn.textContent = 'Submit';
+        showCmsError(err.message || String(err));
+      }
+    };
+  }
+
   // -------------------- Existing entries: list / edit / delete --------------------
   // What a tab click opens for every tab except Weekly Connect (see
   // showTabPicker) — the entries already on that sheet tab, instead of a
@@ -1928,16 +2121,39 @@
     }
   }
 
+  // Whole days between `dateStr` (t.Date, already yyyy-MM-dd from the
+  // server) and now — null on anything unparsable so callers can skip
+  // the badge instead of showing "NaNd open". Purely a display computation:
+  // nothing server-side depends on this, same as the existing `stale` flag.
+  function daysOpen(dateStr) {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return null;
+    return Math.max(0, Math.floor((Date.now() - d.getTime()) / (24 * 60 * 60 * 1000)));
+  }
+
+  function agingBadgeClass(days) {
+    if (days >= STALE_TICKET_DAYS_CLIENT) return 'aging-late';
+    if (days >= Math.ceil(STALE_TICKET_DAYS_CLIENT / 3)) return 'aging-warn';
+    return 'aging-fresh';
+  }
+
+  // Mirrors Code.gs's own STALE_TICKET_DAYS (21) — only used here to color
+  // the aging badge's three bands, not to decide staleness itself (the
+  // server-computed `t.stale` still owns that).
+  const STALE_TICKET_DAYS_CLIENT = 21;
+
   function wcBuildTicketCard(t) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'wc-ticket-btn';
     const statusClass = 'status-' + String(t.Status || '').toLowerCase().replace(/\s+/g, '-');
     const priorityClass = 'priority-' + String(t.Priority || '').toLowerCase();
+    const openDays = t.Status === 'Open' ? daysOpen(t.Date) : null;
     btn.innerHTML = `
       <div class="wc-ticket-top">
         <span class="wc-ticket-id">Q${escapeHtml(t['Ticket ID'])}</span>
         <div class="wc-badges">
+          ${openDays != null ? `<span class="badge ${agingBadgeClass(openDays)}">${openDays}d open</span>` : ''}
           ${t.stale ? '<span class="badge stale">Stale</span>' : ''}
           ${t.Priority ? `<span class="badge ${priorityClass}">${escapeHtml(t.Priority)}</span>` : ''}
           ${t.Status ? `<span class="badge ${statusClass}">${escapeHtml(t.Status)}</span>` : ''}

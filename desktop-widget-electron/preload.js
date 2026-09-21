@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('statusApp', {
   logAppOpened: () => ipcRenderer.invoke('log-app-opened'),
   logNavigation: (tab) => ipcRenderer.invoke('log-navigation', tab),
   getAuditLog: () => ipcRenderer.invoke('get-audit-log'),
+  submitCmsWeeklyConnect: (payload) => ipcRenderer.invoke('submit-cms-weekly-connect', payload),
   getReportConfigs: () => ipcRenderer.invoke('get-report-configs'),
   saveReportConfigs: (configs) => ipcRenderer.invoke('save-report-configs', configs),
   getConnectGroups: () => ipcRenderer.invoke('get-connect-groups'),

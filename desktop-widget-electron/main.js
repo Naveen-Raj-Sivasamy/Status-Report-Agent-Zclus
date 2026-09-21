@@ -251,6 +251,15 @@ let bannerWin = null;
 const RETRY_ATTEMPTS = 3;
 const READ_TIMEOUT_MS = 15000;
 const WRITE_TIMEOUT_MS = 30000;
+// generateAiDigest chains a Sheets read AND a Gemini call — a bigger
+// period (Monthly/Quarterly/Yearly) means a bigger prompt, and Gemini's
+// own response time isn't bounded by anything Sheets-side. Reported:
+// a Monthly digest timing out at 30s, then getting silently retried
+// (see the attempts:1 override on its own ipcMain.handle below) up to
+// 3 times before the app ever showed an error — each retry re-running
+// the whole Gemini call from scratch. 75s is generous for one attempt
+// of even a large prompt on Gemini Flash.
+const DIGEST_TIMEOUT_MS = 75000;
 
 async function callWithRetry(fn, { attempts = RETRY_ATTEMPTS, onRetry } = {}) {
   let lastErr;
@@ -297,7 +306,7 @@ async function apiPostBody(body, opts) {
     const resp = await fetch(config.WEBHOOK_URL, {
       method: 'POST',
       body: JSON.stringify(Object.assign({ token: config.TOKEN, sessionToken }, body)),
-      signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
+      signal: AbortSignal.timeout((opts && opts.timeoutMs) || WRITE_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
@@ -630,7 +639,10 @@ ipcMain.handle('send-report-now', async (_e, { range, configName } = {}) =>
 // text the preview screen showed, not a re-generated one — see
 // postAiDigestToTeams's own comment in Code.gs for why that matters.
 ipcMain.handle('generate-ai-digest', async (_e, { range, configName } = {}) =>
-  apiPostBody(Object.assign({ action: 'generateAiDigest', configName }, range || {}))
+  apiPostBody(
+    Object.assign({ action: 'generateAiDigest', configName }, range || {}),
+    { timeoutMs: DIGEST_TIMEOUT_MS, attempts: 1 }
+  )
 );
 ipcMain.handle('post-ai-digest-to-teams', async (_e, { summary, rangeLabel }) =>
   apiPostBody({ action: 'postAiDigestToTeams', summary, rangeLabel })

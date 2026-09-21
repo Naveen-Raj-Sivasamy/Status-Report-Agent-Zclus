@@ -1857,11 +1857,16 @@ function callGemini_(promptText) {
     throw new Error('No Gemini API key set — get a free one at aistudio.google.com/apikey and add it in Manage > App Settings.');
   }
   var model = getConfigValue('GeminiModel') || 'gemini-2.5-flash';
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) +
-    ':generateContent?key=' + encodeURIComponent(apiKey);
+  // Key goes in the x-goog-api-key header, not a ?key= query param —
+  // Google's documented format for the current "auth key" type (every
+  // key created in AI Studio since May 28, 2026 is one of these; plain
+  // "standard" keys stop working entirely in September 2026). Keeping it
+  // out of the URL also means it never ends up in a server access log.
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
   var response = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
+    headers: { 'x-goog-api-key': apiKey },
     payload: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }] }),
     muteHttpExceptions: true,
   });

@@ -343,6 +343,29 @@
   .entry-delete-btn:disabled { opacity: 0.5; cursor: default; }
   .entries-empty { text-align: center; color: var(--on-brand-dim); font-size: 12px; padding: 20px 0 24px; }
 
+  /* Log Analyser — read-only history of real actions (opens, nav clicks,
+     submit/edit/delete attempts; see Code.gs's logAudit_/getAuditLogRows_
+     for what's actually recorded — real actions only, never a background
+     cache refresh). Left border + badge both carry the Success/Failed
+     signal, one for a quick scan down the list, one for reading closely.
+     Status pills reuse Weekly Connect's existing .wc-filter-row/
+     .wc-filter-btn look rather than introducing a second filter style. */
+  .log-card {
+    background: var(--surface); border-radius: 12px; margin-bottom: 8px;
+    padding: 10px 12px; border-left: 4px solid var(--success);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  }
+  .log-card.log-card-failed { border-left-color: var(--danger); }
+  .log-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+  .log-card-when { font-size: 10.5px; color: var(--text-dim); font-weight: 700; }
+  .log-card-main { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 2px; }
+  .log-card-summary {
+    font-size: 11.5px; color: var(--text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .badge.log-success { background: #d9f3e3; color: #1e6b3e; }
+  .badge.log-failed { background: #fbdada; color: #a13a3a; }
+
   /* richtext field — a formatting toolbar over a plain textarea (stores
      Markdown, not HTML — see the comment in buildFieldInput()). Overrides
      the generic .field textarea rule above (same specificity, wins on
@@ -859,11 +882,13 @@
       <button class="tab-btn" id="clear-cache-btn">Refresh tabs &amp; fields (clear cache)</button>
       <button class="tab-btn" id="manage-fields-btn">Manage fields &amp; options</button>
       <button class="tab-btn" id="connection-settings-btn">Change organization connection</button>
+      <button class="tab-btn" id="log-analyser-btn">Log Analyser</button>
       <button class="tab-btn" id="about-btn">About</button>
       <button class="secondary" id="settings-back-btn" style="width:100%; margin-top:10px;">Back</button>
     `;
 
     document.getElementById('settings-back-btn').onclick = showTabPicker;
+    document.getElementById('log-analyser-btn').onclick = () => showLogAnalyser();
     document.getElementById('about-btn').onclick = () => showAbout();
     // Opens the same password-gated Connect window used on first run —
     // it handles its own password prompt/editing entirely on its own, so
@@ -934,6 +959,111 @@
     } catch (err) {
       showError(err.message || String(err), showAbout);
     }
+  }
+
+  // Read-only history of real user actions — app opens, tab-picker
+  // clicks, submit/edit/delete attempts (Success AND Failed, e.g. a
+  // lock-busy timeout or a rejected duplicate Ticket ID) — see Code.gs's
+  // logAudit_/getAuditLogRows_ for exactly what's recorded and why
+  // (real actions only, never a background stale-while-revalidate
+  // refresh). Fetched fresh every time this screen opens rather than
+  // cached — someone chasing down "what happened to X" wants the latest
+  // rows, not whatever was cached earlier. logAnalyserRows/
+  // logAnalyserStatusFilter live at this scope (not inside the function)
+  // so the search box and status pills can re-filter in place via
+  // renderLogRows() without re-fetching from the server on every
+  // keystroke/click.
+  let logAnalyserRows = [];
+  let logAnalyserStatusFilter = 'all';
+
+  async function showLogAnalyser() {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = 'Log Analyser';
+    els.main.style.minHeight = '';
+    logAnalyserStatusFilter = 'all';
+    showLoading('Loading activity…');
+    try {
+      const res = await window.statusApp.getAuditLog();
+      logAnalyserRows = (res && res.rows) || [];
+      renderLogAnalyserShell();
+    } catch (err) {
+      showError(err.message || String(err), showLogAnalyser);
+    }
+  }
+
+  // Builds the filter controls + rows host ONCE per open/refresh — the
+  // search input keeps its DOM node (and focus) across every keystroke
+  // because only renderLogRows() below touches #log-rows-host afterward,
+  // never this shell.
+  function renderLogAnalyserShell() {
+    els.main.innerHTML = `
+      <div class="wc-filter-row" id="log-status-filters">
+        <button type="button" class="wc-filter-btn" data-status="all">All</button>
+        <button type="button" class="wc-filter-btn" data-status="success">Success</button>
+        <button type="button" class="wc-filter-btn" data-status="failed">Failed</button>
+      </div>
+      <div class="field">
+        <input type="text" id="log-search-input" placeholder="Search user, action, tab, or summary…">
+      </div>
+      <div id="log-rows-host"></div>
+      <button type="button" class="secondary" id="log-refresh-btn" style="width:100%; margin-top:4px;">⟳ Refresh</button>
+      <button type="button" class="secondary" id="log-back-btn" style="width:100%; margin-top:8px;">← Back</button>
+    `;
+
+    document.querySelectorAll('#log-status-filters .wc-filter-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.status === logAnalyserStatusFilter);
+      btn.onclick = () => {
+        logAnalyserStatusFilter = btn.dataset.status;
+        document.querySelectorAll('#log-status-filters .wc-filter-btn').forEach((b) =>
+          b.classList.toggle('active', b.dataset.status === logAnalyserStatusFilter)
+        );
+        renderLogRows();
+      };
+    });
+
+    document.getElementById('log-search-input').oninput = () => renderLogRows();
+    document.getElementById('log-refresh-btn').onclick = () => showLogAnalyser();
+    document.getElementById('log-back-btn').onclick = showSettings;
+
+    renderLogRows();
+  }
+
+  function renderLogRows() {
+    const searchInput = document.getElementById('log-search-input');
+    const search = (searchInput ? searchInput.value : '').trim().toLowerCase();
+    const filtered = logAnalyserRows.filter((r) => {
+      if (logAnalyserStatusFilter === 'failed' && String(r.status).toLowerCase() !== 'failed') return false;
+      if (logAnalyserStatusFilter === 'success' && String(r.status).toLowerCase() === 'failed') return false;
+      if (!search) return true;
+      return [r.username, r.action, r.tab, r.summary].some((v) => String(v || '').toLowerCase().includes(search));
+    });
+
+    const host = document.getElementById('log-rows-host');
+    host.innerHTML = '';
+    if (!filtered.length) {
+      const empty = document.createElement('div');
+      empty.className = 'entries-empty';
+      empty.textContent = logAnalyserRows.length ? 'No activity matches this filter.' : 'No activity recorded yet.';
+      host.appendChild(empty);
+    } else {
+      filtered.forEach((r) => host.appendChild(buildLogCard(r)));
+    }
+  }
+
+  function buildLogCard(r) {
+    const failed = String(r.status).toLowerCase() === 'failed';
+    const card = document.createElement('div');
+    card.className = 'log-card' + (failed ? ' log-card-failed' : '');
+    card.innerHTML = `
+      <div class="log-card-top">
+        <span class="log-card-when">${escapeHtml(r.timestamp)}</span>
+        <span class="badge ${failed ? 'log-failed' : 'log-success'}">${failed ? 'Failed' : 'Success'}</span>
+      </div>
+      <div class="log-card-main">${escapeHtml(r.username || '(not logged in)')} — ${escapeHtml(r.action || '')}${r.tab ? ' · ' + escapeHtml(r.tab) : ''}</div>
+      ${r.summary ? `<div class="log-card-summary">${escapeHtml(r.summary)}</div>` : ''}
+    `;
+    return card;
   }
 
   // Which category's tab list is currently showing, if any — so the many
@@ -1116,7 +1246,10 @@
       // only new entries go through, so it also skips straight to the
       // form. Every other tab opens the generic existing-entries list.
       const skipEntriesList = tab === WEEKLY_CONNECT_TAB || liveDataSourceTypes[tab] === 'Excel';
-      btn.onclick = () => (skipEntriesList ? showForm(tab) : showTabEntries(tab));
+      btn.onclick = () => {
+        window.statusApp.logNavigation(tab).catch(() => {});
+        return skipEntriesList ? showForm(tab) : showTabEntries(tab);
+      };
       els.main.appendChild(btn);
     });
 
@@ -2377,6 +2510,7 @@
   }
 
   window.statusApp.onOpened(async () => {
+    window.statusApp.logAppOpened().catch(() => {});
     yourName = await window.statusApp.getYourName();
     refreshLiveOptions();
     refreshLiveFieldSchema();

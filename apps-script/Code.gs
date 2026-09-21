@@ -894,6 +894,48 @@ function doPost(e) {
       return jsonOut({ ok: true, rows: getTabRows_(body.tab) });
     }
 
+    /** Powers the Log Analyser screen — the most recent MAX_AUDIT_LOG_ROWS
+     * rows from _AuditLog, newest first. Capped so this stays a bounded
+     * response as the log accumulates over time rather than growing
+     * unboundedly with the sheet; the UI's own user/action/status/date
+     * filters all operate on this returned window. */
+    if (body.action === 'getAuditLog') {
+      return jsonOut({ ok: true, rows: getAuditLogRows_() });
+    }
+
+    /** logAppOpened: fired once per genuine popup open (see index.html's
+     * onOpened) — NOT on every background stale-while-revalidate refresh a
+     * cached getTabs/getOptions/etc. call quietly does; those stay the
+     * cheap, lock-free, unauthenticated doGet reads they've always been.
+     * logNavigation: fired once per real click into a category/tab, same
+     * "an actual thing a person did" reasoning. Both funnel into the same
+     * logAudit_ used for real writes, just with action 'open'/'navigate'.
+     *
+     * idempotencyKey dedupes exactly like submitEntry's own — one UUID per
+     * real open/click, reused only across THAT action's own automatic
+     * retries (see main.js's callWithRetry) — so a slow-but-successful
+     * request retried by the client can't double this row. No
+     * LockService here though, unlike submitEntry/updateTabRow/
+     * deleteTabRow: those need a lock because they read-then-write a
+     * SPECIFIC row (or a page's worth of state) that two concurrent
+     * requests could race on; a plain appendRow onto a log tab has no
+     * such race — two of these landing back-to-back just append two rows
+     * without corrupting each other, so the idempotency check alone is
+     * enough to stop retries from duplicating, with no need for the
+     * heavier lock+re-check dance a real data write needs.
+     */
+    if (body.action === 'logAppOpened' || body.action === 'logNavigation') {
+      var logActionName = body.action === 'logAppOpened' ? 'open' : 'navigate';
+      var logIdemKey = body.idempotencyKey ? logActionName + ':' + String(body.idempotencyKey).trim() : '';
+      var logIdemCache = CacheService.getScriptCache();
+      if (logIdemKey && logIdemCache.get(logIdemKey)) {
+        return jsonOut({ ok: true });
+      }
+      logAudit_(body.sessionToken, logActionName, body.tab || '', body.summary || '', 'Success');
+      if (logIdemKey) logIdemCache.put(logIdemKey, '1', 300);
+      return jsonOut({ ok: true });
+    }
+
     /** Overwrites one existing row in place — the list screen's "Save" on
      * an edited entry. `expected` (the row's values as the list last saw
      * them) is an optimistic-concurrency guard: if the row changed (someone
@@ -909,23 +951,33 @@ function doPost(e) {
       if (!updSheet) return jsonOut({ ok: false, error: 'Unknown tab: ' + body.tab });
       var updLock = LockService.getScriptLock();
       if (!updLock.tryLock(LOCK_WAIT_MS)) {
+        logAudit_(body.sessionToken, 'edit', body.tab, 'Server busy — lock timeout.', 'Failed');
         return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
       }
       try {
         var updHeaders = getHeaderRow(updSheet);
         var updRowIndex = Number(body.rowIndex);
         if (updRowIndex < 2 || updRowIndex > updSheet.getLastRow()) {
+          logAudit_(body.sessionToken, 'edit', body.tab, 'Entry no longer exists.', 'Failed');
           return jsonOut({ ok: false, error: 'That entry no longer exists — refresh the list and try again.' });
         }
         var updCurrent = updSheet.getRange(updRowIndex, 1, 1, updHeaders.length).getValues()[0];
         if (body.expected && !rowMatchesExpected_(updHeaders, updCurrent, body.expected)) {
+          logAudit_(body.sessionToken, 'edit', body.tab, 'Entry changed since opened (conflict).', 'Failed');
           return jsonOut({ ok: false, error: 'This entry changed since you opened it — refresh the list and try again.' });
         }
         var updValues = body.values || {};
         if (body.tab === LEAVE_TAB_NAME) {
           var updConflict = findLeaveDateConflict(updHeaders, updSheet, updValues, updRowIndex);
           if (updConflict) {
+            logAudit_(body.sessionToken, 'edit', body.tab, updConflict + ' already on leave that date.', 'Failed');
             return jsonOut({ ok: false, error: updConflict + ' has already applied for leave on this date.' });
+          }
+        }
+        if (body.tab === DAILY_STATUS_TAB_NAME) {
+          if (findDailyStatusTicketConflict_(updHeaders, updSheet, updValues, updRowIndex)) {
+            logAudit_(body.sessionToken, 'edit', body.tab, 'Duplicate Ticket ID.', 'Failed');
+            return jsonOut({ ok: false, error: 'This Ticket ID is already there — check the list.' });
           }
         }
         var updNewRow = updHeaders.map(function (col) {
@@ -952,17 +1004,20 @@ function doPost(e) {
       if (!delSheet) return jsonOut({ ok: false, error: 'Unknown tab: ' + body.tab });
       var delLock = LockService.getScriptLock();
       if (!delLock.tryLock(LOCK_WAIT_MS)) {
+        logAudit_(body.sessionToken, 'delete', body.tab, 'Server busy — lock timeout.', 'Failed');
         return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
       }
       try {
         var delRowIndex = Number(body.rowIndex);
         if (delRowIndex < 2 || delRowIndex > delSheet.getLastRow()) {
+          logAudit_(body.sessionToken, 'delete', body.tab, 'Entry no longer exists.', 'Failed');
           return jsonOut({ ok: false, error: 'That entry no longer exists — it may have already been removed.' });
         }
         if (body.expected) {
           var delHeaders = getHeaderRow(delSheet);
           var delCurrent = delSheet.getRange(delRowIndex, 1, 1, delHeaders.length).getValues()[0];
           if (!rowMatchesExpected_(delHeaders, delCurrent, body.expected)) {
+            logAudit_(body.sessionToken, 'delete', body.tab, 'Entry changed since opened (conflict).', 'Failed');
             return jsonOut({ ok: false, error: 'This entry changed since you opened it — refresh the list and try again.' });
           }
         }
@@ -1026,6 +1081,7 @@ function doPost(e) {
     // the actual write — reads elsewhere are unaffected.)
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(LOCK_WAIT_MS)) {
+      logAudit_(body.sessionToken, 'submit', body.tab, 'Server busy — lock timeout.', 'Failed');
       return jsonOut({ ok: false, error: 'Server is busy — please try again in a few seconds.' });
     }
     var resultObj;
@@ -1046,6 +1102,13 @@ function doPost(e) {
         var conflictName = findLeaveDateConflict(headers, sheet, values);
         if (conflictName) {
           resultObj = { ok: false, error: conflictName + ' has already applied for leave on this date.' };
+        }
+      }
+      // Daily Status-specific: reject a duplicate Ticket ID before it's
+      // ever appended — see findDailyStatusTicketConflict_'s own comment.
+      if (!resultObj && body.tab === DAILY_STATUS_TAB_NAME) {
+        if (findDailyStatusTicketConflict_(headers, sheet, values)) {
+          resultObj = { ok: false, error: 'This Ticket ID is already there — check the list.' };
         }
       }
       if (!resultObj) {
@@ -1084,16 +1147,23 @@ function doPost(e) {
     // Generator already uses — see the ticket list screen's "Post to
     // Teams" button.
 
-    if (resultObj.ok) {
-      // Best-effort, after the lock is already released — see logAudit_'s
-      // own comment for why this never blocks or fails the actual save.
-      // A short, generic summary (first few populated fields) rather than
-      // anything per-tab special-cased, since this runs for every tab.
-      var auditSummary = headers.slice(0, 3).map(function (h) {
-        return values[h] ? h + ': ' + String(values[h]).slice(0, 40) : null;
-      }).filter(Boolean).join(', ');
-      logAudit_(body.sessionToken, 'submit', body.tab, auditSummary || 'New entry added.');
-    }
+    // Best-effort, after the lock is already released — see logAudit_'s own
+    // comment for why this never blocks or fails the actual save. A short,
+    // generic summary (first few populated fields) rather than anything
+    // per-tab special-cased, since this runs for every tab — logged either
+    // way now (Success or Failed), not just on success, so a rejected
+    // submit (Leave conflict, Excel webhook failure, etc.) also leaves a
+    // trace instead of vanishing without one.
+    var auditSummary = headers.slice(0, 3).map(function (h) {
+      return values[h] ? h + ': ' + String(values[h]).slice(0, 40) : null;
+    }).filter(Boolean).join(', ');
+    logAudit_(
+      body.sessionToken,
+      'submit',
+      body.tab,
+      resultObj.ok ? (auditSummary || 'New entry added.') : (resultObj.error || 'Submit failed.'),
+      resultObj.ok ? 'Success' : 'Failed'
+    );
 
     return jsonOut(resultObj);
   } catch (err) {
@@ -1616,6 +1686,38 @@ function normalizeDateForCompare(raw, tz) {
   return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, tz, 'yyyy-MM-dd');
 }
 
+var DAILY_STATUS_TAB_NAME = 'Daily Status';
+
+/** Global (not date- or person-scoped) uniqueness check for Daily Status'
+ * "Ticket ID" column — per the user's own words: "Ticket number should be
+ * unique, if he enters same ticket ID again, it shouldn't submit, it
+ * should say it's already there check the list." Returns true if the
+ * incoming Ticket ID already exists anywhere on the tab (any row, any
+ * date), '' (falsy) if it's free or there's nothing to check. Same calling
+ * convention as findLeaveDateConflict — called INSIDE the write lock, with
+ * `excludeRowIndex` set only for updateTabRow so editing an existing row's
+ * other fields doesn't false-positive against its own unchanged Ticket ID.
+ * A blank incoming Ticket ID is left alone here — required-field
+ * validation (if any) is a separate concern from uniqueness. */
+function findDailyStatusTicketConflict_(headers, sheet, values, excludeRowIndex) {
+  var idIndex = findColumnIndex(headers, 'Ticket ID');
+  if (idIndex === -1) return false; // no Ticket ID column on this tab — nothing to check
+
+  var incoming = String(values[headers[idIndex]] || '').trim();
+  if (!incoming) return false; // no valid incoming ID — let normal required-field flow handle it
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return false;
+
+  var target = incoming.toLowerCase();
+  var idValues = sheet.getRange(2, idIndex + 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < idValues.length; i++) {
+    if (excludeRowIndex && (i + 2) === excludeRowIndex) continue; // that's this same row being edited
+    if (String(idValues[i][0] || '').trim().toLowerCase() === target) return true;
+  }
+  return false;
+}
+
 // ------------------------- Weekly Connect ----------------------------
 
 // Name of the auto-created "Weekly Connect" tab — a normal, visible tab,
@@ -2120,11 +2222,17 @@ function listUsersPublic_() {
 // anywhere in the workbook. A plain, formula-free log tab that nothing
 // else references can't trigger that, no matter how many rows pile up.
 var AUDIT_LOG_TAB_NAME = '_AuditLog';
-var AUDIT_LOG_COLUMNS = ['Timestamp', 'Username', 'Action', 'Tab', 'Summary'];
+var AUDIT_LOG_COLUMNS = ['Timestamp', 'Username', 'Action', 'Tab', 'Summary', 'Status'];
 
 function ensureAuditLogTab() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getSheetByName(AUDIT_LOG_TAB_NAME)) return;
+  if (ss.getSheetByName(AUDIT_LOG_TAB_NAME)) {
+    // Self-heal onto a sheet created before the Status column existed —
+    // same ensureColumnExists_ helper the Field Types screen already uses
+    // to add columns onto existing tabs without disturbing what's there.
+    ensureColumnExists_(AUDIT_LOG_TAB_NAME, 'Status');
+    return;
+  }
   var sheet = ss.insertSheet(AUDIT_LOG_TAB_NAME);
   sheet.getRange(1, 1, 1, AUDIT_LOG_COLUMNS.length).setValues([AUDIT_LOG_COLUMNS]);
 }
@@ -2150,12 +2258,16 @@ function resolveAuditUsername_(sessionToken) {
  * successful save into an error, or block it in any way. Called AFTER
  * the real write's lock is already released, same reasoning as
  * everything else in this app that does something non-essential after
- * the actual data is safely saved (e.g. the old Teams-posting design). */
-function logAudit_(sessionToken, action, tab, summary) {
+ * the actual data is safely saved (e.g. the old Teams-posting design).
+ * `status` defaults to 'Success' — callers on a rejected/failed path
+ * (lock timeout, conflict, validation error) pass 'Failed' explicitly so
+ * the Log Analyser can show what actually went wrong, not just what was
+ * attempted. */
+function logAudit_(sessionToken, action, tab, summary, status) {
   try {
     ensureAuditLogTab();
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(AUDIT_LOG_TAB_NAME);
-    sheet.appendRow([new Date(), resolveAuditUsername_(sessionToken), action, tab || '', summary || '']);
+    sheet.appendRow([new Date(), resolveAuditUsername_(sessionToken), action, tab || '', summary || '', status || 'Success']);
   } catch (err) {
     Logger.log('logAudit_ failed: ' + err);
   }
@@ -3146,6 +3258,40 @@ function getTabRows_(tabName) {
       obj[h] = v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v;
     });
     rows.push({ rowIndex: i + 2, values: obj });
+  });
+  rows.reverse();
+  return rows;
+}
+
+// Bounds getAuditLogRows_' response size as _AuditLog accumulates rows
+// over time — this tab is deliberately plain/formula-free (see its own
+// comment) so a large row count doesn't slow the workbook down, but an
+// unbounded JSON response back to every Log Analyser open still would.
+var MAX_AUDIT_LOG_ROWS = 1000;
+
+/** Every recent row from _AuditLog as a plain object, newest first — see
+ * the getAuditLog doPost action above. Reads the tail of the sheet
+ * directly (last MAX_AUDIT_LOG_ROWS rows) rather than the whole history,
+ * same "bounded, not everything ever" reasoning as getWeeklyConnectTickets
+ * already applies elsewhere. */
+function getAuditLogRows_() {
+  ensureAuditLogTab();
+  var sheet = getSheetByName(AUDIT_LOG_TAB_NAME);
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return [];
+  var startRow = Math.max(2, lastRow - MAX_AUDIT_LOG_ROWS + 1);
+  var numRows = lastRow - startRow + 1;
+  var tz = Session.getScriptTimeZone();
+  var raw = sheet.getRange(startRow, 1, numRows, AUDIT_LOG_COLUMNS.length).getValues();
+  var rows = raw.map(function (r) {
+    return {
+      timestamp: r[0] instanceof Date ? Utilities.formatDate(r[0], tz, "yyyy-MM-dd HH:mm:ss") : String(r[0]),
+      username: r[1] || '',
+      action: r[2] || '',
+      tab: r[3] || '',
+      summary: r[4] || '',
+      status: r[5] || 'Success',
+    };
   });
   rows.reverse();
   return rows;

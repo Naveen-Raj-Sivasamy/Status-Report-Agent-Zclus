@@ -747,6 +747,18 @@ ipcMain.handle('rename-tab', async (_e, { oldName, newName }) => {
 ipcMain.handle('submit-admin-contact', async (_e, payload) =>
   apiPostBody(Object.assign({ action: 'submitAdminContact', idempotencyKey: crypto.randomUUID() }, payload))
 );
+// Log Analyser — best-effort, fire-and-forget (.catch(() => {})) at the
+// call site in index.html/renderer, not here: a logging call failing or
+// being slow must never block or interrupt the actual app-open/navigation
+// it's recording. idempotencyKey follows the same pattern as every other
+// write here, so a retried log call can't double-record one real action.
+ipcMain.handle('log-app-opened', async () =>
+  apiPostBody({ action: 'logAppOpened', idempotencyKey: crypto.randomUUID() }).catch(() => {})
+);
+ipcMain.handle('log-navigation', async (_e, tab) =>
+  apiPostBody({ action: 'logNavigation', tab, idempotencyKey: crypto.randomUUID() }).catch(() => {})
+);
+ipcMain.handle('get-audit-log', async () => apiPostBody({ action: 'getAuditLog' }));
 // Connect Groups — same doPost/token-gated reasoning as report settings
 // (a webhook URL is a write capability). Group names are synced into
 // _Options server-side, so a save here also invalidates this process's

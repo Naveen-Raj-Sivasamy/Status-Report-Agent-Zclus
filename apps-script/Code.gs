@@ -434,6 +434,7 @@ function doPost(e) {
           reportRecipients: getConfigList_('ReportRecipients'),
           reminderRecipients: getConfigList_('ReminderRecipients'),
           teamsWebhookUrl: getConfigValue('TeamsWebhookUrl'),
+          geminiApiKey: getConfigValue('GeminiApiKey'),
           // Who "Contact Admin" (the footer form every screen carries —
           // see submitAdminContact below) emails. Deliberately its own
           // _Config key, not folded into ReportRecipients/ReminderRecipients
@@ -467,6 +468,7 @@ function doPost(e) {
         setConfigValue('ReportRecipients', (settings.reportRecipients || []).join(', '));
         setConfigValue('ReminderRecipients', (settings.reminderRecipients || []).join(', '));
         setConfigValue('TeamsWebhookUrl', (settings.teamsWebhookUrl || '').trim());
+        setConfigValue('GeminiApiKey', (settings.geminiApiKey || '').trim());
         setConfigValue('AdminContactEmails', (settings.adminContactEmails || []).join(', '));
         setConfigValue('DisableWeeklyConnect', settings.disableWeeklyConnect ? 'TRUE' : 'FALSE');
         setConfigValue('DisableLeaveTab', settings.disableLeaveTab ? 'TRUE' : 'FALSE');
@@ -742,6 +744,63 @@ function doPost(e) {
     if (body.action === 'postTodayHighlightsNow') {
       var highlightsResult = postTodayHighlightsToTeams();
       return jsonOut({ ok: highlightsResult.ok, message: highlightsResult.message, error: highlightsResult.ok ? undefined : highlightsResult.message });
+    }
+
+    /** AI weekly digest, step 1 of 2 — generates the summary and hands it
+     * back for the admin to read BEFORE anything goes to Teams (see
+     * postAiDigestToTeams right below for step 2). Read-only + one
+     * outbound Gemini call, no sheet write, so no lock needed. Errors
+     * (missing API key, no Report Config, Gemini itself failing) come
+     * back as a normal {ok:false, error} instead of throwing — this is a
+     * "click a button, see what happened" screen, not a background job. */
+    if (body.action === 'generateAiDigest') {
+      var digestRange = parseRangeFromRequest(body) || getCurrentWeekRange();
+      var digestData = gatherDigestData_(digestRange, body.configName);
+      if (!digestData.configName) {
+        return jsonOut({ ok: false, error: 'No Report Generator config found — set one up in Manage > Report Configs first.' });
+      }
+      try {
+        var digestSummary = callGemini_(buildDigestPromptText_(digestRange, digestData));
+      } catch (digestErr) {
+        logAudit_(body.sessionToken, 'generate', 'AI Digest', String(digestErr), 'Failed');
+        return jsonOut({ ok: false, error: String(digestErr) });
+      }
+      logAudit_(body.sessionToken, 'generate', 'AI Digest', 'Generated for ' + formatRangeLabel(digestRange) + ' (' + digestData.configName + ').');
+      return jsonOut({ ok: true, summary: digestSummary, rangeLabel: formatRangeLabel(digestRange) });
+    }
+
+    /** AI weekly digest, step 2 of 2 — posts EXACTLY the text the client
+     * sends (whatever was just shown on the preview screen), not a freshly
+     * re-generated one — so what gets posted to the whole team is
+     * guaranteed to be what was actually reviewed, even if the sheet
+     * changed in the seconds between generate and post. Same
+     * AdaptiveCard + webhook pattern as postTodayHighlightsToTeams. */
+    if (body.action === 'postAiDigestToTeams') {
+      var digestText = String(body.summary || '').trim();
+      if (!digestText) return jsonOut({ ok: false, error: 'Nothing to post — generate a digest first.' });
+      var digestWebhookUrl = getTeamsWebhookUrl();
+      if (!digestWebhookUrl) return jsonOut({ ok: false, error: 'No Teams webhook configured — set one in Manage > App Settings.' });
+      var digestCardBody = [
+        { type: 'TextBlock', text: 'Weekly Digest' + (body.rangeLabel ? ' — ' + body.rangeLabel : ''), wrap: true, size: 'Medium', weight: 'Bolder' },
+        { type: 'TextBlock', text: digestText, wrap: true, spacing: 'Medium' },
+      ];
+      try {
+        var digestResp = UrlFetchApp.fetch(digestWebhookUrl, {
+          method: 'post',
+          contentType: 'application/json',
+          payload: JSON.stringify(buildAdaptiveCardPayload_(digestCardBody)),
+          muteHttpExceptions: true,
+        });
+        var digestCode = digestResp.getResponseCode();
+        var digestOk = digestCode >= 200 && digestCode < 300;
+        logAudit_(body.sessionToken, 'post', 'AI Digest', digestOk ? 'Posted to Teams.' : 'Teams rejected (HTTP ' + digestCode + ').', digestOk ? 'Success' : 'Failed');
+        return digestOk
+          ? jsonOut({ ok: true, message: 'Posted to Teams.' })
+          : jsonOut({ ok: false, error: 'Teams rejected the post (HTTP ' + digestCode + ').' });
+      } catch (postErr) {
+        logAudit_(body.sessionToken, 'post', 'AI Digest', String(postErr), 'Failed');
+        return jsonOut({ ok: false, error: 'Could not reach Teams: ' + postErr });
+      }
     }
 
     /** Read/write for _ConnectGroups — a webhook URL is a write capability,
@@ -1657,6 +1716,170 @@ function getCurrentWeekRange() {
   var dayIndex = (now.getDay() + 6) % 7; // Monday=0 ... Sunday=6
   var monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayIndex, 0, 0, 0);
   return { start: monday, end: now };
+}
+
+// --------------------------- AI Weekly Digest ---------------------------
+// One Gemini API call summarizing whatever a normal emailed report would
+// have covered, plus who was out — see generateAiDigest/postAiDigestToTeams
+// in doPost above for the two-step generate-then-post flow this powers.
+
+/** Same tab list + same date filtering as buildReportBlob (the real
+ * emailed report) — reusing that config is the whole point (per the
+ * user's own call: the digest should track whatever Report Generator
+ * already considers "this period's data", not a separately hardcoded
+ * tab list). Returns plain values, not a spreadsheet — this never builds
+ * a temp file, it just gathers rows into a compact shape a prompt can be
+ * built from. NOTE: like buildReportBlob, a tab's rows are only date-
+ * filtered if that tab has a column literally named "Date" (see
+ * REPORT_DATE_COLUMN) — CMS Weekly Connect's own date column is named
+ * "Meeting Date", so if that tab is ever added to this report config, its
+ * rows won't be filtered by range here (same limitation the real emailed
+ * report already has, not something new to this digest). */
+function gatherDigestData_(range, configName) {
+  var config = getReportConfigByName_(configName);
+  var sections = [];
+  if (config) {
+    config.tabs.filter(function (t) { return !!getSheetByName(t.tab); }).forEach(function (entry) {
+      var source = getSheetByName(entry.tab);
+      var headers = getHeaderRow(source);
+      var dateIndex = findColumnIndex(headers, REPORT_DATE_COLUMN);
+      var lastRow = source.getLastRow();
+      var rows = [];
+      if (lastRow > 1) {
+        var all = source.getRange(2, 1, lastRow - 1, headers.length).getValues();
+        rows = dateIndex === -1
+          ? all
+          : all.filter(function (r) {
+              var raw = r[dateIndex];
+              var d = raw instanceof Date ? raw : new Date(raw);
+              return !isNaN(d.getTime()) && d >= range.start && d <= range.end;
+            });
+      }
+      sections.push({ tab: entry.tab, headers: headers, rows: rows });
+    });
+  }
+  return { configName: config ? config.name : '', sections: sections, leaves: getLeaveForRange_(range) };
+}
+
+/** Who was out during `range` — same _Config PlannedLeaveTab pointer and
+ * same Name/Date/Reason columns getTodayHighlights() already reads for
+ * the daily banner, just filtered by a range instead of exactly today.
+ * Returns [] (not an error) if PlannedLeaveTab was never set up — the
+ * digest just omits the "who's out" line, same graceful-degradation the
+ * daily banner already has. */
+function getLeaveForRange_(range) {
+  var plannedLeaveTab = getConfigValue('PlannedLeaveTab');
+  var lSheet = plannedLeaveTab ? getSheetByName(plannedLeaveTab) : null;
+  var leaves = [];
+  if (!lSheet) return leaves;
+  var lHeaders = getHeaderRow(lSheet);
+  var lDateIdx = findColumnIndex(lHeaders, 'Date');
+  if (lDateIdx === -1 || lSheet.getLastRow() <= 1) return leaves;
+  var lNameIdx = findColumnIndex(lHeaders, 'Name');
+  var lReasonIdx = findColumnIndex(lHeaders, 'Reason');
+  var tz = Session.getScriptTimeZone();
+  var lRows = lSheet.getRange(2, 1, lSheet.getLastRow() - 1, lHeaders.length).getValues();
+  lRows.forEach(function (row) {
+    var raw = row[lDateIdx];
+    var d = raw instanceof Date ? raw : new Date(raw);
+    if (isNaN(d.getTime()) || d < range.start || d > range.end) return;
+    leaves.push({
+      name: lNameIdx !== -1 ? String(row[lNameIdx] || '') : '',
+      date: normalizeDateForCompare(raw, tz),
+      reason: lReasonIdx !== -1 ? String(row[lReasonIdx] || '') : '',
+    });
+  });
+  return leaves;
+}
+
+// Cap on how many rows of any one tab get fed into the prompt — Gemini's
+// free tier has a real context limit, and a huge dump of raw rows makes
+// for a worse summary anyway (the model has to wade through noise). Plenty
+// for a week's worth of a small team's activity; a range that genuinely
+// blows past this (a Yearly report, say) just gets its oldest rows
+// dropped rather than the call failing outright.
+var DIGEST_MAX_ROWS_PER_TAB_ = 200;
+// Cap on any single cell's text — a long Issue/Queries write-up beyond
+// this is truncated with "…" rather than swallowing the whole token
+// budget on one row.
+var DIGEST_MAX_CELL_CHARS_ = 300;
+
+/** Turns gatherDigestData_'s output into the actual text sent to Gemini —
+ * plain text, not a table the model has to reparse, since a summarizer
+ * reads prose-per-row more reliably than a wall of CSV. */
+function buildDigestPromptText_(range, data) {
+  var lines = [];
+  lines.push('You are writing a concise weekly status digest for a small team\'s manager, for the period ' + formatRangeLabel(range) + '.');
+  lines.push('Below is the raw tracked data for that period. Summarize what the team actually did, call out any notable blockers, issues, or open questions, and mention who was away if anyone was. Write a few short paragraphs or bullet points in plain text (this goes into a Microsoft Teams message) — no markdown tables, no code blocks.');
+  lines.push('');
+
+  data.sections.forEach(function (section) {
+    lines.push('--- ' + section.tab + ' (' + section.rows.length + ' entries) ---');
+    var rows = section.rows.slice(0, DIGEST_MAX_ROWS_PER_TAB_);
+    rows.forEach(function (row) {
+      var parts = section.headers.map(function (h, i) {
+        var v = row[i];
+        if (v instanceof Date) v = Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        v = String(v == null ? '' : v).trim();
+        if (v.length > DIGEST_MAX_CELL_CHARS_) v = v.slice(0, DIGEST_MAX_CELL_CHARS_) + '…';
+        return v ? (h + ': ' + v) : null;
+      }).filter(Boolean);
+      if (parts.length) lines.push(parts.join(' | '));
+    });
+    if (section.rows.length > rows.length) {
+      lines.push('(' + (section.rows.length - rows.length) + ' more entries omitted for length)');
+    }
+    lines.push('');
+  });
+
+  if (data.leaves.length) {
+    lines.push('--- Away this period ---');
+    data.leaves.forEach(function (l) {
+      lines.push(l.date + ': ' + (l.name || '(unnamed)') + (l.reason ? ' — ' + l.reason : ''));
+    });
+  } else {
+    lines.push('(Nobody recorded as away this period.)');
+  }
+
+  return lines.join('\n');
+}
+
+/** Plain UrlFetchApp call to Gemini's generateContent endpoint — no SDK,
+ * no new dependency, same as every other outbound call this file already
+ * makes (Teams webhooks, the Sheets export endpoint). GeminiModel is a
+ * _Config value, not hardcoded, specifically so a model rename/retirement
+ * on Google's side is a one-line Sheet edit instead of a code deploy.
+ * Throws a plain Error with a message safe to show directly in the app —
+ * doPost's generateAiDigest catches it and returns {ok:false, error}. */
+function callGemini_(promptText) {
+  var apiKey = getConfigValue('GeminiApiKey');
+  if (!apiKey) {
+    throw new Error('No Gemini API key set — get a free one at aistudio.google.com/apikey and add it in Manage > App Settings.');
+  }
+  var model = getConfigValue('GeminiModel') || 'gemini-2.5-flash';
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) +
+    ':generateContent?key=' + encodeURIComponent(apiKey);
+  var response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }] }),
+    muteHttpExceptions: true,
+  });
+  var code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error('Gemini API error (HTTP ' + code + ', model "' + model + '"): ' + response.getContentText().slice(0, 300));
+  }
+  var json = JSON.parse(response.getContentText());
+  var candidate = json.candidates && json.candidates[0];
+  var text = candidate && candidate.content && candidate.content.parts && candidate.content.parts[0] && candidate.content.parts[0].text;
+  if (!text) {
+    // Most common real-world cause: the prompt tripped a safety filter
+    // (candidate.finishReason === 'SAFETY') rather than an HTTP error —
+    // surfaced as its own message so it doesn't look like a generic bug.
+    var reason = candidate && candidate.finishReason;
+    throw new Error(reason ? ('Gemini returned no text (finishReason: ' + reason + ').') : 'Gemini returned no text.');
+  }
+  return text.trim();
 }
 
 // ============================== HELPERS ===================================
@@ -3558,6 +3781,14 @@ function ensureConfigDefaults_(sheet) {
     ['ReportRecipients', ''],
     ['ReminderRecipients', ''],
     ['TeamsWebhookUrl', ''],
+    // AI weekly digest — see generateAiDigest_'s own comment. A free key
+    // from Google AI Studio (aistudio.google.com/apikey), tied to your
+    // Google account, not Azure — no billing needed for a small team's
+    // volume. GeminiModel is its own separate value (not hardcoded) so a
+    // model rename/retirement on Google's side is a one-line _Config edit,
+    // not a code change.
+    ['GeminiApiKey', ''],
+    ['GeminiModel', 'gemini-2.5-flash'],
     // Who the footer's "Contact Admin" form emails — see submitAdminContact
     // and the _SupportTickets tab it also logs every submission to.
     ['AdminContactEmails', ''],

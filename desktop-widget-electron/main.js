@@ -624,6 +624,17 @@ ipcMain.handle('delete-tab-row', async (_e, { tab, rowIndex, expected }) => {
 ipcMain.handle('send-report-now', async (_e, { range, configName } = {}) =>
   apiPostBody(Object.assign({ action: 'sendReportNow', configName }, range || {}))
 );
+// AI Weekly Digest — generate (step 1) hits Gemini server-side and just
+// hands back text, no cache to invalidate (nothing here reads from
+// wherever that text came from). post (step 2) sends back exactly the
+// text the preview screen showed, not a re-generated one — see
+// postAiDigestToTeams's own comment in Code.gs for why that matters.
+ipcMain.handle('generate-ai-digest', async (_e, { range, configName } = {}) =>
+  apiPostBody(Object.assign({ action: 'generateAiDigest', configName }, range || {}))
+);
+ipcMain.handle('post-ai-digest-to-teams', async (_e, { summary, rangeLabel }) =>
+  apiPostBody({ action: 'postAiDigestToTeams', summary, rangeLabel })
+);
 // Report Configs — the generalized, multi-report replacement for the old
 // single hardcoded ReportTabs/ReportRecipients setup. Same token-gated
 // doPost reasoning as saveOptions/saveFieldSchema/saveReportSettings.

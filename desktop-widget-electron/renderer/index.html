@@ -906,6 +906,119 @@
     };
   }
 
+  // -------------------- AI Weekly Digest --------------------
+  // Two-step, human-in-the-loop by design (see the trade-off note this
+  // was built with): Generate shows the AI summary on screen first;
+  // nothing reaches Teams until a separate Post click, and that post
+  // sends back exactly the text on screen — not a fresh regeneration —
+  // so what the team sees always matches what was actually reviewed.
+  async function showAiDigest() {
+    els.footer.classList.add('hidden');
+    els.reportActions.classList.add('hidden');
+    els.sub.textContent = 'AI Weekly Digest';
+    els.main.style.minHeight = '';
+    showLoading('Loading…');
+    let configs = [];
+    try {
+      const res = await window.statusApp.getReportConfigs();
+      configs = (res && res.configs) || [];
+    } catch {
+      configs = []; // best-effort, same reasoning as showReportOptions — backend defaults to the first config either way
+    }
+
+    els.main.innerHTML = `
+      ${configs.length > 1 ? `
+        <div class="field">
+          <label>Report data to summarize</label>
+          <select id="digest-config-select">
+            ${configs.map((c) => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('')}
+          </select>
+        </div>` : ''}
+      <div class="field">
+        <label>Period</label>
+        <select id="range-type">
+          <option value="week">This Week</option>
+          <option value="custom">Custom Range</option>
+          <option value="month">Monthly</option>
+          <option value="quarter">Quarterly</option>
+          <option value="year">Yearly</option>
+        </select>
+      </div>
+      <div id="range-fields"></div>
+      <button class="amber-btn" id="digest-generate-btn" style="width:100%;">Generate Digest</button>
+      <div id="digest-result-host"></div>
+      <button class="secondary" id="digest-back-btn" style="width:100%; margin-top:10px;">Back</button>
+    `;
+
+    const rangeFields = document.getElementById('range-fields');
+    const rangeType = document.getElementById('range-type');
+    const renderSubFields = () => { rangeFields.innerHTML = rangeSubFieldsHtml(rangeType.value); };
+    rangeType.onchange = renderSubFields;
+    renderSubFields();
+
+    const selectedConfigName = () => {
+      const select = document.getElementById('digest-config-select');
+      return select ? select.value : undefined;
+    };
+
+    document.getElementById('digest-back-btn').onclick = showTabPicker;
+
+    document.getElementById('digest-generate-btn').onclick = async () => {
+      let range;
+      try {
+        range = computeRangeFromOptions();
+      } catch (err) {
+        showError(err.message, showAiDigest);
+        return;
+      }
+      const genBtn = document.getElementById('digest-generate-btn');
+      const resultHost = document.getElementById('digest-result-host');
+      genBtn.disabled = true;
+      genBtn.textContent = 'Generating…';
+      resultHost.innerHTML = '';
+      try {
+        const res = await window.statusApp.generateAiDigest(range, selectedConfigName());
+        genBtn.disabled = false;
+        genBtn.textContent = 'Generate Digest';
+        if (!res || res.ok === false) {
+          resultHost.innerHTML = `<div class="cms-error" style="margin-top:10px;">${escapeHtml((res && res.error) || 'Could not generate a digest.')}</div>`;
+          return;
+        }
+        resultHost.innerHTML = `
+          <div class="field" style="margin-top:10px;">
+            <label>Summary — ${escapeHtml(res.rangeLabel || '')}</label>
+            <textarea id="digest-summary-text" rows="10">${escapeHtml(res.summary)}</textarea>
+          </div>
+          <button class="primary" id="digest-post-btn" style="width:100%;">Post to Teams</button>
+        `;
+        document.getElementById('digest-post-btn').onclick = async () => {
+          const postBtn = document.getElementById('digest-post-btn');
+          const summaryNow = document.getElementById('digest-summary-text').value.trim();
+          postBtn.disabled = true;
+          postBtn.textContent = 'Posting…';
+          try {
+            await window.statusApp.postAiDigestToTeams(summaryNow, res.rangeLabel);
+            showResult({
+              success: true,
+              title: 'Posted to Teams!',
+              subtitle: res.rangeLabel,
+              doneLabel: 'Done',
+              onDone: showTabPicker,
+            });
+          } catch (err) {
+            postBtn.disabled = false;
+            postBtn.textContent = 'Post to Teams';
+            resultHost.insertAdjacentHTML('beforeend', `<div class="cms-error" style="margin-top:8px;">${escapeHtml(err.message || String(err))}</div>`);
+          }
+        };
+      } catch (err) {
+        genBtn.disabled = false;
+        genBtn.textContent = 'Generate Digest';
+        resultHost.innerHTML = `<div class="cms-error" style="margin-top:10px;">${escapeHtml(err.message || String(err))}</div>`;
+      }
+    };
+  }
+
   // Each row is styled like a tab-picker entry so adding another setting
   // later is just another button in this list — no new layout needed.
   function showSettings() {
@@ -918,12 +1031,14 @@
       <button class="tab-btn" id="manage-fields-btn">Manage fields &amp; options</button>
       <button class="tab-btn" id="connection-settings-btn">Change organization connection</button>
       <button class="tab-btn" id="log-analyser-btn">Log Analyser</button>
+      <button class="tab-btn" id="ai-digest-btn">AI Weekly Digest</button>
       <button class="tab-btn" id="about-btn">About</button>
       <button class="secondary" id="settings-back-btn" style="width:100%; margin-top:10px;">Back</button>
     `;
 
     document.getElementById('settings-back-btn').onclick = showTabPicker;
     document.getElementById('log-analyser-btn').onclick = () => showLogAnalyser();
+    document.getElementById('ai-digest-btn').onclick = () => showAiDigest();
     document.getElementById('about-btn').onclick = () => showAbout();
     // Opens the same password-gated Connect window used on first run —
     // it handles its own password prompt/editing entirely on its own, so

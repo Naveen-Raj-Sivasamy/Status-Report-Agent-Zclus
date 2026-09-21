@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld('statusApp', {
   deleteTabRow: (tab, rowIndex, expected) =>
     ipcRenderer.invoke('delete-tab-row', { tab, rowIndex, expected }),
   sendReportNow: (range, configName) => ipcRenderer.invoke('send-report-now', { range, configName }),
+  generateAiDigest: (range, configName) => ipcRenderer.invoke('generate-ai-digest', { range, configName }),
+  postAiDigestToTeams: (summary, rangeLabel) => ipcRenderer.invoke('post-ai-digest-to-teams', { summary, rangeLabel }),
   downloadReport: (range, configName) => ipcRenderer.invoke('download-report', { range, configName }),
   getNextNumber: (tab, column) => ipcRenderer.invoke('get-next-number', { tab, column }),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),

@@ -435,6 +435,7 @@ function doPost(e) {
           reminderRecipients: getConfigList_('ReminderRecipients'),
           teamsWebhookUrl: getConfigValue('TeamsWebhookUrl'),
           geminiApiKey: getConfigValue('GeminiApiKey'),
+          geminiModel: getConfigValue('GeminiModel'),
           // Who "Contact Admin" (the footer form every screen carries —
           // see submitAdminContact below) emails. Deliberately its own
           // _Config key, not folded into ReportRecipients/ReminderRecipients
@@ -469,6 +470,7 @@ function doPost(e) {
         setConfigValue('ReminderRecipients', (settings.reminderRecipients || []).join(', '));
         setConfigValue('TeamsWebhookUrl', (settings.teamsWebhookUrl || '').trim());
         setConfigValue('GeminiApiKey', (settings.geminiApiKey || '').trim());
+        setConfigValue('GeminiModel', (settings.geminiModel || '').trim() || 'gemini-3.6-flash');
         setConfigValue('AdminContactEmails', (settings.adminContactEmails || []).join(', '));
         setConfigValue('DisableWeeklyConnect', settings.disableWeeklyConnect ? 'TRUE' : 'FALSE');
         setConfigValue('DisableLeaveTab', settings.disableLeaveTab ? 'TRUE' : 'FALSE');
@@ -1856,7 +1858,7 @@ function callGemini_(promptText) {
   if (!apiKey) {
     throw new Error('No Gemini API key set — get a free one at aistudio.google.com/apikey and add it in Manage > App Settings.');
   }
-  var model = getConfigValue('GeminiModel') || 'gemini-2.5-flash';
+  var model = getConfigValue('GeminiModel') || 'gemini-3.6-flash';
   // Key goes in the x-goog-api-key header, not a ?key= query param —
   // Google's documented format for the current "auth key" type (every
   // key created in AI Studio since May 28, 2026 is one of these; plain
@@ -3793,7 +3795,7 @@ function ensureConfigDefaults_(sheet) {
     // model rename/retirement on Google's side is a one-line _Config edit,
     // not a code change.
     ['GeminiApiKey', ''],
-    ['GeminiModel', 'gemini-2.5-flash'],
+    ['GeminiModel', 'gemini-3.6-flash'],
     // Who the footer's "Contact Admin" form emails — see submitAdminContact
     // and the _SupportTickets tab it also logs every submission to.
     ['AdminContactEmails', ''],
